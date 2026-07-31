@@ -534,7 +534,8 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   void selectNode(String nodeName, {bool multiSelect = false}) {
-    final wasEmpty = _selectedNodeNames.isEmpty;
+    final beforeCount = _selectedNodeNames.length;
+
     if (multiSelect) {
       if (_selectedNodeNames.contains(nodeName)) {
         _selectedNodeNames.remove(nodeName);
@@ -549,7 +550,8 @@ class DesktopViewModel extends ChangeNotifier {
         _selectedNodeNames.add(nodeName);
       }
     }
-    if (wasEmpty != _selectedNodeNames.isEmpty || !multiSelect) {
+
+    if (beforeCount != _selectedNodeNames.length) {
       notifyListeners();
     }
   }

@@ -23,13 +23,19 @@ class _DesktopViewState extends State<DesktopView> {
   void initState() {
     super.initState();
     _focusNode = FocusNode();
+    HardwareKeyboard.instance.addHandler(_handleRawKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
   }
 
+  bool _handleRawKeyEvent(KeyEvent event) {
+    return false;
+  }
+
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleRawKeyEvent);
     _focusNode.dispose();
     super.dispose();
   }
@@ -174,7 +180,8 @@ class _DesktopViewState extends State<DesktopView> {
                       },
                       onTap: () {
                         final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
-                        viewModel.selectNode(node.name, multiSelect: isCtrlPressed);
+                        final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+                        viewModel.selectNode(node.name, multiSelect: isCtrlPressed || isShiftPressed);
                       },
                       onSecondaryTapDown: (details) {
                         if (!isSelected) {
@@ -226,7 +233,8 @@ class _DesktopViewState extends State<DesktopView> {
           icon: Icons.create_new_folder,
           onTap: () {
             final gridPos = viewModel.pixelPosToGridPos(position - viewModel.offset);
-            _promptCreate(context, viewModel, isDirectory: true, gridPosition: gridPos);
+            final adjustedPos = Offset(gridPos.dx - DesktopViewModel.gridSize, gridPos.dy - DesktopViewModel.gridSize);
+            _promptCreate(context, viewModel, isDirectory: true, gridPosition: adjustedPos);
           },
         ),
         CascadingMenuItem(
@@ -234,7 +242,8 @@ class _DesktopViewState extends State<DesktopView> {
           icon: Icons.note_add,
           onTap: () {
             final gridPos = viewModel.pixelPosToGridPos(position - viewModel.offset);
-            _promptCreate(context, viewModel, isDirectory: false, gridPosition: gridPos);
+            final adjustedPos = Offset(gridPos.dx - DesktopViewModel.gridSize, gridPos.dy - DesktopViewModel.gridSize);
+            _promptCreate(context, viewModel, isDirectory: false, gridPosition: adjustedPos);
           },
         ),
         CascadingMenuItem.divider(),
