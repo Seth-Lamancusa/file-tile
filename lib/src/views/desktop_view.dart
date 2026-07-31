@@ -15,6 +15,36 @@ class DesktopView extends StatefulWidget {
 }
 
 class _DesktopViewState extends State<DesktopView> {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.delete) {
+      final viewModel = context.read<DesktopViewModel>();
+      final selectedNodeName = viewModel.selectedNodeName;
+      if (selectedNodeName != null) {
+        final node = viewModel.nodes.firstWhere((n) => n.name == selectedNodeName);
+        _confirmDelete(context, viewModel, node, () {});
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<DesktopViewModel>();
@@ -68,9 +98,12 @@ class _DesktopViewState extends State<DesktopView> {
           const SizedBox(width: 8),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          return Listener(
+      body: Focus(
+        focusNode: _focusNode,
+        onKeyEvent: _handleKeyEvent,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Listener(
             onPointerSignal: (pointerSignal) {
               if (pointerSignal is PointerScrollEvent) {
                 final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
@@ -179,8 +212,9 @@ class _DesktopViewState extends State<DesktopView> {
                   ),
               ],
             ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
