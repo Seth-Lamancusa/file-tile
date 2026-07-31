@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'path_service.dart';
 
 /// Service for reading and writing desktop view configuration.
@@ -14,6 +15,9 @@ class ProjectRootConfigService {
         return {};
       }
       final content = await file.readAsString();
+      if (content.trim().isEmpty) {
+        return {};
+      }
       final data = jsonDecode(content);
       return Map<String, dynamic>.from(data ?? {});
     } catch (e) {
@@ -31,13 +35,5 @@ class ProjectRootConfigService {
     } catch (e) {
       debugPrint('Error writing config: $e');
     }
-  }
-}
-
-void debugPrint(String message) {
-  // Simple debug print implementation
-  // In a Flutter context, you can replace this with Flutter's debugPrint
-  if (const bool.fromEnvironment('DEBUG')) {
-    print('[DEBUG] $message');
   }
 }
