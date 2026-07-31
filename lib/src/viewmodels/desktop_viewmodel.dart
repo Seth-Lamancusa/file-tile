@@ -169,6 +169,7 @@ class DesktopViewModel extends ChangeNotifier {
 
     await loadDirectory(_currentDirectory, addToHistory: false);
     _initialized = true;
+    await _saveGlobalConfig();
     notifyListeners();
   }
 
