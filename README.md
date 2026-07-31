@@ -86,12 +86,12 @@ viewModel.fileColor = Colors.greenAccent;
 
 The grid stores two types of configuration:
 
-1. **Global Config** (`.stitch_desktop_config.json`)
+1. **Global Config** (`stitch-grid-config.json`)
    - Default folder/file colors
    - Last visited directory
    - Per-directory zoom and pan state
 
-2. **Per-Directory Metadata** (`.stitch_desktop.json`)
+2. **Per-Directory Metadata** (`stitch-grid.json`)
    - File/folder positions
    - Custom colors per item
    - Layout version
@@ -250,6 +250,10 @@ MIT
 ## Contributing
 
 Contributions are welcome! Feel free to open issues or submit PRs.
+
+## Notes
+
+When in doubt, see /docs. There are plans for ongoing work, as well as internal and external documentation files addressing existing implementations and common patterns or pain points.
 
 ---
 

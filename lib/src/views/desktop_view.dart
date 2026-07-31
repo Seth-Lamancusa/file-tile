@@ -1,9 +1,11 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:path/path.dart' as p;
 import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
+import '../widgets/cascading_menu.dart';
 
 class DesktopView extends StatefulWidget {
   const DesktopView({super.key});
@@ -21,6 +23,7 @@ class _DesktopViewState extends State<DesktopView> {
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1E1E1E),
+        toolbarHeight: 40,
         title: Row(
           children: [
             IconButton(
@@ -57,6 +60,11 @@ class _DesktopViewState extends State<DesktopView> {
             onPressed: () => viewModel.refresh(),
             tooltip: 'Refresh',
           ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => _showSettingsModal(context, viewModel),
+            tooltip: 'Settings',
+          ),
           const SizedBox(width: 8),
         ],
       ),
@@ -65,14 +73,32 @@ class _DesktopViewState extends State<DesktopView> {
           return Listener(
             onPointerSignal: (pointerSignal) {
               if (pointerSignal is PointerScrollEvent) {
-                double zoomFactor = 1.1;
-                double newScale = viewModel.scale;
-                if (pointerSignal.scrollDelta.dy > 0) {
-                  newScale /= zoomFactor;
+                final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
+                final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+
+                if (isCtrlPressed) {
+                  // Ctrl + scroll = zoom
+                  double zoomFactor = 1.1;
+                  double newScale = viewModel.scale;
+                  if (pointerSignal.scrollDelta.dy > 0) {
+                    newScale /= zoomFactor;
+                  } else {
+                    newScale *= zoomFactor;
+                  }
+                  viewModel.scale = newScale.clamp(0.1, 10.0);
+                } else if (isShiftPressed) {
+                  // Shift + scroll = horizontal pan
+                  final delta = viewModel.invertHorizontalScroll
+                    ? -pointerSignal.scrollDelta.dy
+                    : pointerSignal.scrollDelta.dy;
+                  viewModel.offset = viewModel.offset + Offset(delta, 0);
                 } else {
-                  newScale *= zoomFactor;
+                  // Default = vertical pan
+                  final delta = viewModel.invertVerticalScroll
+                    ? -pointerSignal.scrollDelta.dy
+                    : pointerSignal.scrollDelta.dy;
+                  viewModel.offset = viewModel.offset + Offset(0, delta);
                 }
-                viewModel.scale = newScale.clamp(0.1, 10.0);
               }
             },
             child: Stack(
@@ -80,6 +106,9 @@ class _DesktopViewState extends State<DesktopView> {
                 Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      viewModel.deselectNode();
+                    },
                     onPanUpdate: (details) {
                       viewModel.offset = viewModel.offset + details.delta;
                     },
@@ -99,6 +128,7 @@ class _DesktopViewState extends State<DesktopView> {
                 ),
                 ...viewModel.nodes.map((node) {
                   final screenPos = viewModel.offset + (node.position * viewModel.scale);
+                  final isSelected = viewModel.selectedNodeName == node.name;
                   return Positioned(
                     left: screenPos.dx,
                     top: screenPos.dy,
@@ -109,7 +139,17 @@ class _DesktopViewState extends State<DesktopView> {
                       onPanEnd: (_) {
                         viewModel.snapNodeToGrid(node.name);
                       },
+                      onTap: () {
+                        if (isSelected) {
+                          viewModel.deselectNode();
+                        } else {
+                          viewModel.selectNode(node.name);
+                        }
+                      },
                       onSecondaryTapDown: (details) {
+                        if (!isSelected) {
+                          viewModel.selectNode(node.name);
+                        }
                         _showNodeContextMenu(context, details.globalPosition, node, viewModel);
                       },
                       onDoubleTap: node.isDirectory
@@ -121,6 +161,7 @@ class _DesktopViewState extends State<DesktopView> {
                         gridSize: DesktopViewModel.gridSize,
                         directoryColor: viewModel.directoryColor,
                         fileColor: viewModel.fileColor,
+                        isSelected: isSelected,
                       ),
                     ),
                   );
@@ -145,41 +186,31 @@ class _DesktopViewState extends State<DesktopView> {
   }
 
   void _showBackgroundContextMenu(BuildContext context, Offset position, DesktopViewModel viewModel) {
-    showMenu<dynamic>(
-      context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      color: const Color(0xFF1E1E1E),
-      items: <PopupMenuEntry<dynamic>>[
-        PopupMenuItem(
-          onTap: () => _promptCreate(context, viewModel, isDirectory: true),
-          child: const Row(
-            children: [
-              Icon(Icons.create_new_folder, color: Colors.white70, size: 20),
-              SizedBox(width: 12),
-              Text('New Folder', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
+    CascadingMenu.show(
+      context,
+      position: position,
+      items: [
+        CascadingMenuItem(
+          label: 'New Folder',
+          icon: Icons.create_new_folder,
+          onTap: () {
+            final gridPos = viewModel.pixelPosToGridPos(position - viewModel.offset);
+            _promptCreate(context, viewModel, isDirectory: true, gridPosition: gridPos);
+          },
         ),
-        PopupMenuItem(
-          onTap: () => _promptCreate(context, viewModel, isDirectory: false),
-          child: const Row(
-            children: [
-              Icon(Icons.note_add, color: Colors.white70, size: 20),
-              SizedBox(width: 12),
-              Text('New File', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
+        CascadingMenuItem(
+          label: 'New File',
+          icon: Icons.note_add,
+          onTap: () {
+            final gridPos = viewModel.pixelPosToGridPos(position - viewModel.offset);
+            _promptCreate(context, viewModel, isDirectory: false, gridPosition: gridPos);
+          },
         ),
-        const PopupMenuDivider(height: 1),
-        PopupMenuItem(
+        CascadingMenuItem.divider(),
+        CascadingMenuItem(
+          label: 'Refresh',
+          icon: Icons.refresh,
           onTap: () => viewModel.refresh(),
-          child: const Row(
-            children: [
-              Icon(Icons.refresh, color: Colors.white70, size: 20),
-              SizedBox(width: 12),
-              Text('Refresh', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
         ),
       ],
     );
@@ -190,185 +221,150 @@ class _DesktopViewState extends State<DesktopView> {
     final isBash = extension == '.sh';
     final isPython = extension == '.py';
     final isNode = extension == '.js' || extension == '.mjs' || extension == '.cjs' || extension == '.ts';
+    final available = viewModel.appRegistry.where((app) => viewModel.availableApps[app['cmd']] == true).toList();
 
-    showMenu<dynamic>(
-      context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      color: const Color(0xFF1E1E1E),
-      items: <PopupMenuEntry<dynamic>>[
-        PopupMenuItem(
-          onTap: node.isDirectory
-            ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
-            : () => viewModel.openSystemDefault(node.name),
-          child: Row(
-            children: [
-              Icon(node.isDirectory ? Icons.folder_open : Icons.open_in_new, color: Colors.white70, size: 20),
-              const SizedBox(width: 12),
-              const Text('Open', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
+    final items = <CascadingMenuItem>[
+      CascadingMenuItem(
+        label: 'Open',
+        icon: node.isDirectory ? Icons.folder_open : Icons.open_in_new,
+        onTap: node.isDirectory
+          ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
+          : () => viewModel.openSystemDefault(node.name),
+      ),
+      CascadingMenuItem(
+        label: 'Open With...',
+        icon: Icons.apps,
+        children: [
+          CascadingMenuItem(
+            label: 'System Default',
+            icon: Icons.settings_suggest,
+            onTap: () => viewModel.openSystemDefault(node.name),
           ),
-        ),
-        PopupMenuItem(
-          onTap: () {
-            Future.delayed(Duration.zero, () {
-              if (context.mounted) {
-                _showOpenWithMenu(context, position, viewModel, node.name);
-              }
-            });
-          },
-          child: const Row(
-            children: [
-              Icon(Icons.apps, color: Colors.white70, size: 20),
-              SizedBox(width: 12),
-              Expanded(child: Text('Open With...', style: TextStyle(color: Colors.white, fontSize: 13))),
-              Icon(Icons.chevron_right, color: Colors.white54, size: 16),
-            ],
-          ),
-        ),
-        PopupMenuItem(
-          onTap: () => _promptRename(context, viewModel, node),
-          child: const Row(
-            children: [
-              Icon(Icons.edit, color: Colors.white70, size: 20),
-              const SizedBox(width: 12),
-              Text('Rename', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-        if (!node.isDirectory && (isBash || isPython || isNode)) ...[
-          const PopupMenuDivider(height: 1),
-          if (isBash)
-            PopupMenuItem(
-              child: const Row(
-                children: [
-                  Icon(Icons.terminal, color: Colors.white70, size: 20),
-                  SizedBox(width: 12),
-                  Expanded(child: Text('Bash Script', style: TextStyle(color: Colors.white, fontSize: 13))),
-                  Icon(Icons.chevron_right, color: Colors.white54, size: 16),
-                ],
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showScriptRunMenu(context, position, viewModel, 'bash', node.name);
-              },
-            ),
-          if (isPython)
-            PopupMenuItem(
-              child: const Row(
-                children: [
-                  Icon(Icons.code, color: Colors.white70, size: 20),
-                  SizedBox(width: 12),
-                  Expanded(child: Text('Python Script', style: TextStyle(color: Colors.white, fontSize: 13))),
-                  Icon(Icons.chevron_right, color: Colors.white54, size: 16),
-                ],
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showScriptRunMenu(context, position, viewModel, 'python3', node.name);
-              },
-            ),
-          if (isNode)
-            PopupMenuItem(
-              child: const Row(
-                children: [
-                  Icon(Icons.javascript, color: Colors.white70, size: 20),
-                  SizedBox(width: 12),
-                  Expanded(child: Text('Node.js Script', style: TextStyle(color: Colors.white, fontSize: 13))),
-                  Icon(Icons.chevron_right, color: Colors.white54, size: 16),
-                ],
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showScriptRunMenu(context, position, viewModel, 'node', node.name);
-              },
-            ),
+          if (available.isNotEmpty) CascadingMenuItem.divider(),
+          ...available.map((app) => CascadingMenuItem(
+            label: app['name']!,
+            icon: _getIconData(app['icon']!),
+            onTap: () => viewModel.openWith(app['cmd']!, node.name),
+          )),
         ],
-        const PopupMenuDivider(height: 1),
-        PopupMenuItem(
-          onTap: () {
-            Future.delayed(Duration.zero, () {
-              if (context.mounted) {
-                _showColorPicker(context, position, node, viewModel);
-              }
-            });
-          },
-          child: const Row(
+      ),
+      CascadingMenuItem(
+        label: 'Rename',
+        icon: Icons.edit,
+        onTap: () => _promptRename(context, viewModel, node, () => Navigator.pop(context)),
+      ),
+      if (!node.isDirectory && (isBash || isPython || isNode)) ...[
+        CascadingMenuItem.divider(),
+        if (isBash)
+          CascadingMenuItem(
+            label: 'Bash Script',
+            icon: Icons.terminal,
             children: [
-              Icon(Icons.palette, color: Colors.white70, size: 20),
-              SizedBox(width: 12),
-              Expanded(child: Text('Change Color', style: TextStyle(color: Colors.white, fontSize: 13))),
-              Icon(Icons.chevron_right, color: Colors.white54, size: 16),
+              CascadingMenuItem(
+                label: 'Capture Output (Dialog)',
+                icon: Icons.output,
+                onTap: () => _runScript(context, viewModel, 'bash', node.name),
+              ),
+              CascadingMenuItem(
+                label: 'Run in Terminal (Interactive)',
+                icon: Icons.terminal,
+                onTap: () => viewModel.runInTerminal('bash', node.name),
+              ),
             ],
           ),
-        ),
-        const PopupMenuDivider(height: 1),
-        PopupMenuItem(
-          onTap: () => _confirmDelete(context, viewModel, node),
-          child: const Row(
+        if (isPython)
+          CascadingMenuItem(
+            label: 'Python Script',
+            icon: Icons.code,
             children: [
-              Icon(Icons.delete, color: Colors.redAccent, size: 20),
-              const SizedBox(width: 12),
-              Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+              CascadingMenuItem(
+                label: 'Capture Output (Dialog)',
+                icon: Icons.output,
+                onTap: () => _runScript(context, viewModel, 'python3', node.name),
+              ),
+              CascadingMenuItem(
+                label: 'Run in Terminal (Interactive)',
+                icon: Icons.terminal,
+                onTap: () => viewModel.runInTerminal('python3', node.name),
+              ),
             ],
           ),
-        ),
+        if (isNode)
+          CascadingMenuItem(
+            label: 'Node.js Script',
+            icon: Icons.javascript,
+            children: [
+              CascadingMenuItem(
+                label: 'Capture Output (Dialog)',
+                icon: Icons.output,
+                onTap: () => _runScript(context, viewModel, 'node', node.name),
+              ),
+              CascadingMenuItem(
+                label: 'Run in Terminal (Interactive)',
+                icon: Icons.terminal,
+                onTap: () => viewModel.runInTerminal('node', node.name),
+              ),
+            ],
+          ),
       ],
-    );
-  }
-
-  void _showColorPicker(BuildContext context, Offset position, DesktopNode node, DesktopViewModel viewModel) {
-    final colors = [
-      null, // Reset to default
-      Colors.redAccent,
-      Colors.greenAccent,
-      Colors.blueAccent,
-      Colors.orangeAccent,
-      Colors.purpleAccent,
-      Colors.pinkAccent,
-      Colors.tealAccent,
+      CascadingMenuItem.divider(),
+      CascadingMenuItem(
+        label: 'Change Color',
+        icon: Icons.palette,
+        children: [
+          CascadingMenuItem(
+            label: 'Default',
+            onTap: () => viewModel.updateNodeColor(node.name, null),
+          ),
+          CascadingMenuItem.divider(),
+          CascadingMenuItem(
+            label: 'Red',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.redAccent),
+          ),
+          CascadingMenuItem(
+            label: 'Green',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.greenAccent),
+          ),
+          CascadingMenuItem(
+            label: 'Blue',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.blueAccent),
+          ),
+          CascadingMenuItem(
+            label: 'Orange',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.orangeAccent),
+          ),
+          CascadingMenuItem(
+            label: 'Purple',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.purpleAccent),
+          ),
+          CascadingMenuItem(
+            label: 'Pink',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.pinkAccent),
+          ),
+          CascadingMenuItem(
+            label: 'Teal',
+            onTap: () => viewModel.updateNodeColor(node.name, Colors.tealAccent),
+          ),
+        ],
+      ),
+      CascadingMenuItem.divider(),
+      CascadingMenuItem(
+        label: 'Delete',
+        icon: Icons.delete,
+        textColor: Colors.redAccent,
+        iconColor: Colors.redAccent,
+        onTap: () => _confirmDelete(context, viewModel, node, () => Navigator.pop(context)),
+      ),
     ];
 
-    showMenu<dynamic>(
-      context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      color: const Color(0xFF1E1E1E),
-      items: colors.map<PopupMenuEntry<dynamic>>((color) => PopupMenuItem(
-        onTap: () => viewModel.updateNodeColor(node.name, color),
-        child: Row(
-          children: [
-            Container(
-              width: 20,
-              height: 20,
-              decoration: BoxDecoration(
-                color: color ?? (node.isDirectory ? viewModel.directoryColor : viewModel.fileColor),
-                shape: BoxShape.circle,
-                border: color == null ? Border.all(color: Colors.white54) : null,
-              ),
-              child: color == null ? const Icon(Icons.close, size: 12, color: Colors.white54) : null,
-            ),
-            const SizedBox(width: 12),
-            Text(
-              color == null ? 'Default' : _colorName(color),
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
-          ],
-        ),
-      )).toList(),
+    CascadingMenu.show(
+      context,
+      position: position,
+      items: items,
     );
   }
 
-  String _colorName(Color color) {
-    if (color == Colors.redAccent) return 'Red';
-    if (color == Colors.greenAccent) return 'Green';
-    if (color == Colors.blueAccent) return 'Blue';
-    if (color == Colors.orangeAccent) return 'Orange';
-    if (color == Colors.purpleAccent) return 'Purple';
-    if (color == Colors.pinkAccent) return 'Pink';
-    if (color == Colors.tealAccent) return 'Teal';
-    return 'Custom';
-  }
-
-  Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory}) async {
+  Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory, Offset? gridPosition}) async {
     final controller = TextEditingController();
     final type = isDirectory ? 'Folder' : 'File';
 
@@ -389,9 +385,9 @@ class _DesktopViewState extends State<DesktopView> {
           onSubmitted: (value) {
             if (value.isNotEmpty) {
               if (isDirectory) {
-                viewModel.createDirectory(value);
+                viewModel.createDirectory(value, gridPosition: gridPosition);
               } else {
-                viewModel.createFile(value);
+                viewModel.createFile(value, gridPosition: gridPosition);
               }
               Navigator.pop(context);
             }
@@ -406,9 +402,9 @@ class _DesktopViewState extends State<DesktopView> {
             onPressed: () {
               if (controller.text.isNotEmpty) {
                 if (isDirectory) {
-                  viewModel.createDirectory(controller.text);
+                  viewModel.createDirectory(controller.text, gridPosition: gridPosition);
                 } else {
-                  viewModel.createFile(controller.text);
+                  viewModel.createFile(controller.text, gridPosition: gridPosition);
                 }
                 Navigator.pop(context);
               }
@@ -420,7 +416,9 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Future<void> _promptRename(BuildContext context, DesktopViewModel viewModel, DesktopNode node) async {
+  Future<void> _promptRename(BuildContext context, DesktopViewModel viewModel, DesktopNode node, VoidCallback onConfirm) async {
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (!context.mounted) return;
     final controller = TextEditingController(text: node.name);
 
     return showDialog(
@@ -441,6 +439,7 @@ class _DesktopViewState extends State<DesktopView> {
             if (value.isNotEmpty && value != node.name) {
               viewModel.renameNode(node.name, value);
               Navigator.pop(context);
+              onConfirm();
             }
           },
         ),
@@ -454,45 +453,13 @@ class _DesktopViewState extends State<DesktopView> {
               if (controller.text.isNotEmpty && controller.text != node.name) {
                 viewModel.renameNode(node.name, controller.text);
                 Navigator.pop(context);
+                onConfirm();
               }
             },
             child: const Text('Rename'),
           ),
         ],
       ),
-    );
-  }
-
-  void _showOpenWithMenu(BuildContext context, Offset position, DesktopViewModel viewModel, String fileName) {
-    final available = viewModel.appRegistry.where((app) => viewModel.availableApps[app['cmd']] == true).toList();
-
-    showMenu<dynamic>(
-      context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      color: const Color(0xFF1E1E1E),
-      items: [
-        PopupMenuItem(
-          onTap: () => viewModel.openSystemDefault(fileName),
-          child: const Row(
-            children: [
-              Icon(Icons.settings_suggest, color: Colors.white70, size: 20),
-              SizedBox(width: 12),
-              Text('System Default', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-        if (available.isNotEmpty) const PopupMenuDivider(height: 1),
-        ...available.map((app) => PopupMenuItem(
-          onTap: () => viewModel.openWith(app['cmd']!, fileName),
-          child: Row(
-            children: [
-              Icon(_getIconData(app['icon']!), color: Colors.white70, size: 20),
-              const SizedBox(width: 12),
-              Text(app['name']!, style: const TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        )),
-      ],
     );
   }
 
@@ -504,36 +471,6 @@ class _DesktopViewState extends State<DesktopView> {
       case 'folder_open': return Icons.folder_open;
       default: return Icons.apps;
     }
-  }
-
-  void _showScriptRunMenu(BuildContext context, Offset position, DesktopViewModel viewModel, String tool, String fileName) {
-    showMenu<dynamic>(
-      context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      color: const Color(0xFF1E1E1E),
-      items: [
-        PopupMenuItem(
-          onTap: () => _runScript(context, viewModel, tool, fileName),
-          child: Row(
-            children: [
-              const Icon(Icons.output, color: Colors.white70, size: 20),
-              const SizedBox(width: 12),
-              Text('Capture Output (Dialog)', style: const TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-        PopupMenuItem(
-          onTap: () => viewModel.runInTerminal(tool, fileName),
-          child: Row(
-            children: [
-              const Icon(Icons.terminal, color: Colors.white70, size: 20),
-              const SizedBox(width: 12),
-              Text('Run in Terminal (Interactive)', style: const TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-      ],
-    );
   }
 
   Future<void> _runScript(BuildContext context, DesktopViewModel viewModel, String tool, String fileName) async {
@@ -570,7 +507,9 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, DesktopViewModel viewModel, DesktopNode node) async {
+  Future<void> _confirmDelete(BuildContext context, DesktopViewModel viewModel, DesktopNode node, VoidCallback onConfirm) async {
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (!context.mounted) return;
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -583,13 +522,64 @@ class _DesktopViewState extends State<DesktopView> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
-              viewModel.deleteNode(node.name);
-              Navigator.pop(context);
+            onPressed: () async {
+              await viewModel.deleteNode(node.name);
+              if (context.mounted) {
+                Navigator.pop(context);
+              }
+              onConfirm();
             },
             child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showSettingsModal(BuildContext context, DesktopViewModel viewModel) {
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          title: const Text('Settings', style: TextStyle(color: Colors.white)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Scroll Settings', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  title: const Text('Invert Vertical Scroll', style: TextStyle(color: Colors.white)),
+                  value: viewModel.invertVerticalScroll,
+                  onChanged: (value) {
+                    viewModel.invertVerticalScroll = value;
+                    setState(() {});
+                  },
+                  activeThumbColor: Colors.blueAccent,
+                ),
+                SwitchListTile(
+                  title: const Text('Invert Horizontal Scroll', style: TextStyle(color: Colors.white)),
+                  value: viewModel.invertHorizontalScroll,
+                  onChanged: (value) {
+                    viewModel.invertHorizontalScroll = value;
+                    setState(() {});
+                  },
+                  activeThumbColor: Colors.blueAccent,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -631,6 +621,7 @@ class _DesktopNodeWidget extends StatelessWidget {
   final double gridSize;
   final Color directoryColor;
   final Color fileColor;
+  final bool isSelected;
 
   const _DesktopNodeWidget({
     required this.node,
@@ -638,6 +629,7 @@ class _DesktopNodeWidget extends StatelessWidget {
     required this.gridSize,
     required this.directoryColor,
     required this.fileColor,
+    this.isSelected = false,
   });
 
   @override
@@ -649,10 +641,14 @@ class _DesktopNodeWidget extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.02),
+        color: isSelected
+          ? effectiveColor.withValues(alpha: 0.15)
+          : Colors.white.withValues(alpha: 0.02),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.05),
-          width: 0.5,
+          color: isSelected
+            ? effectiveColor.withValues(alpha: 0.8)
+            : Colors.white.withValues(alpha: 0.05),
+          width: isSelected ? 2.0 : 0.5,
         ),
       ),
       child: Column(
@@ -673,7 +669,7 @@ class _DesktopNodeWidget extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.8),
-                fontSize: (size * 0.12).clamp(5.0, 12.0),
+                fontSize: (size * 0.16).clamp(6.0, 16.0),
                 height: 1.1,
               ),
             ),

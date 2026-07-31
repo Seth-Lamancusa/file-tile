@@ -34,8 +34,16 @@ class DesktopViewModel extends ChangeNotifier {
   Offset _offset = Offset.zero;
   bool _initialized = false;
 
+  String? _selectedNodeName;
+
   Color _directoryColor = const Color(0xFFEBC351);
   Color _fileColor = const Color(0xFF64B5F6);
+
+  bool _invertVerticalScroll = false;
+  bool _invertHorizontalScroll = false;
+
+  bool get invertVerticalScroll => _invertVerticalScroll;
+  bool get invertHorizontalScroll => _invertHorizontalScroll;
 
   final List<String> _history = [];
   final List<String> _forwardHistory = [];
@@ -60,6 +68,7 @@ class DesktopViewModel extends ChangeNotifier {
   Offset get offset => _offset;
   Color get directoryColor => _directoryColor;
   Color get fileColor => _fileColor;
+  String? get selectedNodeName => _selectedNodeName;
 
   set directoryColor(Color value) {
     if (_directoryColor != value) {
@@ -72,6 +81,22 @@ class DesktopViewModel extends ChangeNotifier {
   set fileColor(Color value) {
     if (_fileColor != value) {
       _fileColor = value;
+      notifyListeners();
+      _saveGlobalConfig();
+    }
+  }
+
+  set invertVerticalScroll(bool value) {
+    if (_invertVerticalScroll != value) {
+      _invertVerticalScroll = value;
+      notifyListeners();
+      _saveGlobalConfig();
+    }
+  }
+
+  set invertHorizontalScroll(bool value) {
+    if (_invertHorizontalScroll != value) {
+      _invertHorizontalScroll = value;
       notifyListeners();
       _saveGlobalConfig();
     }
@@ -127,6 +152,9 @@ class DesktopViewModel extends ChangeNotifier {
       _fileColor = Color(config['file_color'] as int);
     }
 
+    _invertVerticalScroll = config['invert_vertical_scroll'] as bool? ?? false;
+    _invertHorizontalScroll = config['invert_horizontal_scroll'] as bool? ?? false;
+
     final lastDir = config['last_visited_directory'] as String?;
     if (lastDir != null && await Directory(lastDir).exists()) {
       _currentDirectory = lastDir;
@@ -141,6 +169,7 @@ class DesktopViewModel extends ChangeNotifier {
 
     await loadDirectory(_currentDirectory, addToHistory: false);
     _initialized = true;
+    notifyListeners();
   }
 
   Future<void> _saveGlobalConfig() async {
@@ -148,6 +177,8 @@ class DesktopViewModel extends ChangeNotifier {
     final config = await ProjectRootConfigService.readLocalConfig();
     config['directory_color'] = _directoryColor.value;
     config['file_color'] = _fileColor.value;
+    config['invert_vertical_scroll'] = _invertVerticalScroll;
+    config['invert_horizontal_scroll'] = _invertHorizontalScroll;
     await ProjectRootConfigService.writeLocalConfig(config);
   }
 
@@ -188,6 +219,7 @@ class DesktopViewModel extends ChangeNotifier {
       await _saveViewState();
     }
 
+    _selectedNodeName = null;
     _isLoading = true;
     notifyListeners();
 
@@ -230,7 +262,7 @@ class DesktopViewModel extends ChangeNotifier {
 
       final entities = await dir.list().toList();
 
-      final metadataFile = File(p.join(path, '.stitch_desktop.json'));
+      final metadataFile = File(p.join(path, 'stitch-grid.json'));
       Map<String, dynamic> layout = {};
       if (await metadataFile.exists()) {
         try {
@@ -251,7 +283,7 @@ class DesktopViewModel extends ChangeNotifier {
 
       for (var e in entities) {
         final name = p.basename(e.path);
-        if (name == '.stitch_desktop.json') continue;
+        if (name == 'stitch-grid.json') continue;
 
         final nodeLayout = layout[name];
         if (nodeLayout != null) {
@@ -340,30 +372,70 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> createFile(String name) async {
+  Future<void> createFile(String name, {Offset? gridPosition}) async {
     final file = File(p.join(_currentDirectory, name));
     if (!await file.exists()) {
       await file.create();
-      await loadDirectory(_currentDirectory, addToHistory: false);
+      await loadDirectory(_currentDirectory, addToHistory: false, force: true);
+      if (gridPosition != null) {
+        final index = _nodes.indexWhere((n) => n.name == name);
+        if (index != -1) {
+          _nodes[index].position = gridPosition;
+          await _saveMetadata();
+        }
+      }
     }
   }
 
-  Future<void> createDirectory(String name) async {
+  Future<void> createDirectory(String name, {Offset? gridPosition}) async {
     final dir = Directory(p.join(_currentDirectory, name));
     if (!await dir.exists()) {
       await dir.create();
-      await loadDirectory(_currentDirectory, addToHistory: false);
+      await loadDirectory(_currentDirectory, addToHistory: false, force: true);
+      if (gridPosition != null) {
+        final index = _nodes.indexWhere((n) => n.name == name);
+        if (index != -1) {
+          _nodes[index].position = gridPosition;
+          await _saveMetadata();
+        }
+      }
     }
   }
 
   Future<void> deleteNode(String name) async {
     final path = p.join(_currentDirectory, name);
-    if (await File(path).exists()) {
-      await File(path).delete();
-    } else if (await Directory(path).exists()) {
-      await Directory(path).delete(recursive: true);
+    try {
+      if (await File(path).exists()) {
+        await File(path).delete();
+        debugPrint('Deleted file: $path');
+      } else if (await Directory(path).exists()) {
+        await Directory(path).delete(recursive: true);
+        debugPrint('Deleted directory: $path');
+      } else {
+        debugPrint('Path does not exist: $path');
+      }
+    } catch (e) {
+      debugPrint('Error deleting: $e');
+      rethrow;
     }
-    await loadDirectory(_currentDirectory, addToHistory: false);
+
+    final metadataFile = File(p.join(_currentDirectory, 'stitch-grid.json'));
+    if (await metadataFile.exists()) {
+      try {
+        final content = await metadataFile.readAsString();
+        final data = json.decode(content);
+        final layout = data['layout'] as Map<String, dynamic>?;
+        if (layout != null && layout.containsKey(name)) {
+          layout.remove(name);
+          await metadataFile.writeAsString(json.encode(data));
+          debugPrint('Removed $name from metadata');
+        }
+      } catch (e) {
+        debugPrint('Failed to update metadata during delete: $e');
+      }
+    }
+
+    await loadDirectory(_currentDirectory, addToHistory: false, force: true);
   }
 
   Future<void> renameNode(String oldName, String newName) async {
@@ -376,7 +448,7 @@ class DesktopViewModel extends ChangeNotifier {
       await Directory(oldPath).rename(newPath);
     }
 
-    final metadataFile = File(p.join(_currentDirectory, '.stitch_desktop.json'));
+    final metadataFile = File(p.join(_currentDirectory, 'stitch-grid.json'));
     if (await metadataFile.exists()) {
       try {
         final content = await metadataFile.readAsString();
@@ -391,7 +463,7 @@ class DesktopViewModel extends ChangeNotifier {
       }
     }
 
-    await loadDirectory(_currentDirectory, addToHistory: false);
+    await loadDirectory(_currentDirectory, addToHistory: false, force: true);
   }
 
   Future<void> refresh() async {
@@ -427,7 +499,7 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   Future<void> _saveMetadata() async {
-    final metadataFile = File(p.join(_currentDirectory, '.stitch_desktop.json'));
+    final metadataFile = File(p.join(_currentDirectory, 'stitch-grid.json'));
     final layout = {
       for (var node in _nodes) node.name: node.toJson()
     };
@@ -438,10 +510,30 @@ class DesktopViewModel extends ChangeNotifier {
     await metadataFile.writeAsString(json.encode(data));
   }
 
+  Offset pixelPosToGridPos(Offset pixelPos) {
+    final gridX = (pixelPos.dx / gridSize).round() * gridSize;
+    final gridY = (pixelPos.dy / gridSize).round() * gridSize;
+    return Offset(gridX, gridY);
+  }
+
   void navigateUp() {
     final parent = p.dirname(_currentDirectory);
     if (parent != _currentDirectory) {
       loadDirectory(parent);
+    }
+  }
+
+  void selectNode(String nodeName) {
+    if (_selectedNodeName != nodeName) {
+      _selectedNodeName = nodeName;
+      notifyListeners();
+    }
+  }
+
+  void deselectNode() {
+    if (_selectedNodeName != null) {
+      _selectedNodeName = null;
+      notifyListeners();
     }
   }
 

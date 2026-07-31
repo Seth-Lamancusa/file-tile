@@ -1,7 +1,7 @@
 import 'dart:io';
 
 /// Simple path service for managing application directories.
-/// Stores data in a `.stitch_desktop` directory in the provided base directory.
+/// Stores data in the provided base directory.
 class PathService {
   static String _baseDir = '';
 
@@ -19,9 +19,9 @@ class PathService {
     return _baseDir;
   }
 
-  /// Path to the local config file (.stitch_desktop_config.json)
+  /// Path to the local config file (stitch-grid-config.json)
   static String get localConfigPath {
-    return '${baseDir}/.stitch_desktop_config.json';
+    return '${baseDir}/stitch-grid-config.json';
   }
 
   /// Ensure the base directory exists.
