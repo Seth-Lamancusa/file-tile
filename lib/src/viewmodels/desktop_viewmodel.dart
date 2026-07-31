@@ -175,12 +175,13 @@ class DesktopViewModel extends ChangeNotifier {
 
   Future<void> _saveGlobalConfig() async {
     if (!_initialized) return;
-    final config = await ProjectRootConfigService.readLocalConfig();
-    config['directory_color'] = _directoryColor.value;
-    config['file_color'] = _fileColor.value;
-    config['invert_vertical_scroll'] = _invertVerticalScroll;
-    config['invert_horizontal_scroll'] = _invertHorizontalScroll;
-    await ProjectRootConfigService.writeLocalConfig(config);
+    await ProjectRootConfigService.updateLocalConfig((config) {
+      config['directory_color'] = _directoryColor.value;
+      config['file_color'] = _fileColor.value;
+      config['invert_vertical_scroll'] = _invertVerticalScroll;
+      config['invert_horizontal_scroll'] = _invertHorizontalScroll;
+      return config;
+    });
   }
 
   set scale(double value) {
@@ -201,16 +202,17 @@ class DesktopViewModel extends ChangeNotifier {
 
   Future<void> _saveViewState() async {
     if (!_initialized) return;
-    final config = await ProjectRootConfigService.readLocalConfig();
-    final viewStates = Map<String, dynamic>.from(config['desktop_view_states'] ?? {});
-    viewStates[_currentDirectory] = {
-      'scale': _scale,
-      'offset_x': _offset.dx,
-      'offset_y': _offset.dy,
-    };
-    config['desktop_view_states'] = viewStates;
-    config['last_visited_directory'] = _currentDirectory;
-    await ProjectRootConfigService.writeLocalConfig(config);
+    await ProjectRootConfigService.updateLocalConfig((config) {
+      final viewStates = Map<String, dynamic>.from(config['desktop_view_states'] ?? {});
+      viewStates[_currentDirectory] = {
+        'scale': _scale,
+        'offset_x': _offset.dx,
+        'offset_y': _offset.dy,
+      };
+      config['desktop_view_states'] = viewStates;
+      config['last_visited_directory'] = _currentDirectory;
+      return config;
+    });
   }
 
   Future<void> loadDirectory(String path, {bool addToHistory = true, bool clearForward = true, bool force = false}) async {
