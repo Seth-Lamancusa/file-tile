@@ -7,6 +7,8 @@ import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
 
+export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction;
+
 class DesktopView extends StatefulWidget {
   const DesktopView({super.key});
 
@@ -35,10 +37,8 @@ class _DesktopViewState extends State<DesktopView> {
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.delete) {
       final viewModel = context.read<DesktopViewModel>();
-      final selectedNodeName = viewModel.selectedNodeName;
-      if (selectedNodeName != null) {
-        final node = viewModel.nodes.firstWhere((n) => n.name == selectedNodeName);
-        _confirmDelete(context, viewModel, node, () {});
+      if (viewModel.selectedNodeNames.isNotEmpty) {
+        _confirmDeleteSelected(context, viewModel);
         return KeyEventResult.handled;
       }
     }
@@ -161,7 +161,7 @@ class _DesktopViewState extends State<DesktopView> {
                 ),
                 ...viewModel.nodes.map((node) {
                   final screenPos = viewModel.offset + (node.position * viewModel.scale);
-                  final isSelected = viewModel.selectedNodeName == node.name;
+                  final isSelected = viewModel.isNodeSelected(node.name);
                   return Positioned(
                     left: screenPos.dx,
                     top: screenPos.dy,
@@ -173,17 +173,14 @@ class _DesktopViewState extends State<DesktopView> {
                         viewModel.snapNodeToGrid(node.name);
                       },
                       onTap: () {
-                        if (isSelected) {
-                          viewModel.deselectNode();
-                        } else {
-                          viewModel.selectNode(node.name);
-                        }
+                        final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
+                        viewModel.selectNode(node.name, multiSelect: isCtrlPressed);
                       },
                       onSecondaryTapDown: (details) {
                         if (!isSelected) {
                           viewModel.selectNode(node.name);
                         }
-                        _showNodeContextMenu(context, details.globalPosition, node, viewModel);
+                        _showNodeContextMenu(context, details.globalPosition, viewModel);
                       },
                       onDoubleTap: node.isDirectory
                         ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
@@ -250,7 +247,10 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  void _showNodeContextMenu(BuildContext context, Offset position, DesktopNode node, DesktopViewModel viewModel) {
+  void _showNodeContextMenu(BuildContext context, Offset position, DesktopViewModel viewModel) {
+    final selectedNodes = viewModel.selectedNodeNames.map((name) => viewModel.nodes.firstWhere((n) => n.name == name)).toList();
+    if (selectedNodes.isEmpty) return;
+    final node = selectedNodes.first;
     final extension = p.extension(node.name).toLowerCase();
     final isBash = extension == '.sh';
     final isPython = extension == '.py';
@@ -387,7 +387,10 @@ class _DesktopViewState extends State<DesktopView> {
         icon: Icons.delete,
         textColor: Colors.redAccent,
         iconColor: Colors.redAccent,
-        onTap: () => _confirmDelete(context, viewModel, node, () => Navigator.pop(context)),
+        onTap: () {
+          Navigator.pop(context);
+          _confirmDeleteSelected(context, viewModel);
+        },
       ),
     ];
 
@@ -541,15 +544,24 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, DesktopViewModel viewModel, DesktopNode node, VoidCallback onConfirm) async {
+  Future<void> _confirmDeleteSelected(BuildContext context, DesktopViewModel viewModel) async {
     await Future.delayed(const Duration(milliseconds: 100));
     if (!context.mounted) return;
+
+    final selectedNames = viewModel.selectedNodeNames.toList()..sort();
+    final isMultiple = selectedNames.length > 1;
+    final deleteMessage = isMultiple
+        ? 'Are you sure you want to delete ${selectedNames.length} items?\n\n${selectedNames.join('\n')}'
+        : 'Are you sure you want to delete "${selectedNames.first}"?';
+
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
         title: const Text('Delete', style: TextStyle(color: Colors.white)),
-        content: Text('Are you sure you want to delete "${node.name}"?', style: const TextStyle(color: Colors.white70)),
+        content: SingleChildScrollView(
+          child: Text(deleteMessage, style: const TextStyle(color: Colors.white70)),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -557,11 +569,10 @@ class _DesktopViewState extends State<DesktopView> {
           ),
           TextButton(
             onPressed: () async {
-              await viewModel.deleteNode(node.name);
+              await viewModel.performSelectAction(DesktopSelectAction.delete);
               if (context.mounted) {
                 Navigator.pop(context);
               }
-              onConfirm();
             },
             child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
           ),

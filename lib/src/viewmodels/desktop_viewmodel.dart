@@ -5,6 +5,12 @@ import 'package:path/path.dart' as p;
 import '../services/path_service.dart';
 import '../services/project_root_config_service.dart';
 
+/// Actions that can be performed on selected nodes.
+/// This is the single source of truth for select actions in the desktop view.
+enum DesktopSelectAction {
+  delete,
+}
+
 class DesktopNode {
   final String name;
   final bool isDirectory;
@@ -34,7 +40,7 @@ class DesktopViewModel extends ChangeNotifier {
   Offset _offset = Offset.zero;
   bool _initialized = false;
 
-  String? _selectedNodeName;
+  final Set<String> _selectedNodeNames = {};
 
   Color _directoryColor = const Color(0xFFEBC351);
   Color _fileColor = const Color(0xFF64B5F6);
@@ -68,7 +74,8 @@ class DesktopViewModel extends ChangeNotifier {
   Offset get offset => _offset;
   Color get directoryColor => _directoryColor;
   Color get fileColor => _fileColor;
-  String? get selectedNodeName => _selectedNodeName;
+  Set<String> get selectedNodeNames => _selectedNodeNames;
+  bool isNodeSelected(String nodeName) => _selectedNodeNames.contains(nodeName);
 
   set directoryColor(Color value) {
     if (_directoryColor != value) {
@@ -222,7 +229,7 @@ class DesktopViewModel extends ChangeNotifier {
       await _saveViewState();
     }
 
-    _selectedNodeName = null;
+    _selectedNodeNames.clear();
     _isLoading = true;
     notifyListeners();
 
@@ -526,17 +533,49 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
-  void selectNode(String nodeName) {
-    if (_selectedNodeName != nodeName) {
-      _selectedNodeName = nodeName;
+  void selectNode(String nodeName, {bool multiSelect = false}) {
+    final wasEmpty = _selectedNodeNames.isEmpty;
+    if (multiSelect) {
+      if (_selectedNodeNames.contains(nodeName)) {
+        _selectedNodeNames.remove(nodeName);
+      } else {
+        _selectedNodeNames.add(nodeName);
+      }
+    } else {
+      if (_selectedNodeNames.length == 1 && _selectedNodeNames.contains(nodeName)) {
+        _selectedNodeNames.clear();
+      } else {
+        _selectedNodeNames.clear();
+        _selectedNodeNames.add(nodeName);
+      }
+    }
+    if (wasEmpty != _selectedNodeNames.isEmpty || !multiSelect) {
       notifyListeners();
     }
   }
 
   void deselectNode() {
-    if (_selectedNodeName != null) {
-      _selectedNodeName = null;
+    if (_selectedNodeNames.isNotEmpty) {
+      _selectedNodeNames.clear();
       notifyListeners();
+    }
+  }
+
+  /// Performs a select action on all selected nodes.
+  /// Currently supported: [DesktopSelectAction.delete]
+  Future<void> performSelectAction(DesktopSelectAction action) async {
+    if (_selectedNodeNames.isEmpty) return;
+
+    switch (action) {
+      case DesktopSelectAction.delete:
+        await _performDelete();
+    }
+  }
+
+  Future<void> _performDelete() async {
+    final nodesToDelete = _selectedNodeNames.toList();
+    for (final nodeName in nodesToDelete) {
+      await deleteNode(nodeName);
     }
   }
 
