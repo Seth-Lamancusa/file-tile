@@ -256,11 +256,12 @@ class _DesktopViewState extends State<DesktopView> {
                     ),
                   ),
                 ),
-                ...viewModel.nodes.map((node) {
+                ...viewModel.orderedNodes.map((node) {
                   final screenPos = viewModel.coords.logicalToScreen(node.position);
                   final isSelected = viewModel.isNodeSelected(node.name);
                   final visibleBorders = _getVisibleBorders(node, viewModel);
                   return Positioned(
+                    key: ValueKey(node.name),
                     left: screenPos.dx,
                     top: screenPos.dy,
                     child: GestureDetector(

@@ -89,6 +89,16 @@ class DesktopViewModel extends ChangeNotifier {
 
   String get currentDirectory => _currentDirectory;
   List<DesktopNode> get nodes => _nodes;
+
+  /// Nodes in render order, with any currently-dragged nodes moved to the
+  /// end so they render on top of everything else in the Stack.
+  List<DesktopNode> get orderedNodes {
+    if (_dragStartPositions.isEmpty) return _nodes;
+    final dragging = _dragStartPositions.keys.toSet();
+    final notDragging = _nodes.where((n) => !dragging.contains(n.name));
+    final draggingNodes = _nodes.where((n) => dragging.contains(n.name));
+    return [...notDragging, ...draggingNodes];
+  }
   bool get isLoading => _isLoading;
   bool get isInitialized => _initialized;
   String? get lastError => _lastError;
