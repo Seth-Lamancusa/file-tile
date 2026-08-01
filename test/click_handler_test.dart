@@ -27,20 +27,22 @@ void main() {
       final coords = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
 
       // Click node1
-      clickHandler.handlePointerDown(
+      final result1 = clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(40, 40),
         nodes: nodes,
         coords: coords,
       );
       expect(selectionController.selected, {'node1'});
+      expect(result1, isA<NodeClickResult>());
 
       // Click node2
-      clickHandler.handlePointerDown(
+      final result2 = clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(120, 40),
         nodes: nodes,
         coords: coords,
       );
       expect(selectionController.selected, {'node2'});
+      expect(result2, isA<NodeClickResult>());
     });
 
     test('empty canvas click clears selection', () {
@@ -50,7 +52,7 @@ void main() {
       final coords = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
 
       // Click node1
-      clickHandler.handlePointerDown(
+      clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(40, 40),
         nodes: nodes,
         coords: coords,
@@ -58,12 +60,13 @@ void main() {
       expect(selectionController.selected, {'node1'});
 
       // Click empty area
-      clickHandler.handlePointerDown(
+      final resultEmpty = clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(200, 200),
         nodes: nodes,
         coords: coords,
       );
       expect(selectionController.selected, isEmpty);
+      expect(resultEmpty, isA<BackgroundClickResult>());
     });
 
     test('range select finds all nodes in bounding box', () {
@@ -76,7 +79,7 @@ void main() {
       final coords = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
 
       // Select node1
-      clickHandler.handlePointerDown(
+      clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(40, 40),
         nodes: nodes,
         coords: coords,
@@ -96,7 +99,7 @@ void main() {
       final coords = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
 
       // Single click node1
-      clickHandler.handlePointerDown(
+      clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(40, 40),
         nodes: nodes,
         coords: coords,
@@ -121,12 +124,13 @@ void main() {
 
       // At 2x zoom, node1 (80x80 logical) renders as 160x160 screen pixels
       // Clicking at screen (80, 80) should hit node1
-      clickHandler.handlePointerDown(
+      final result = clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(80, 80),
         nodes: nodes,
         coords: coords,
       );
       expect(selectionController.selected, {'node1'});
+      expect(result, isA<NodeClickResult>());
     });
 
     test('handles pan offset correctly', () {
@@ -137,12 +141,45 @@ void main() {
       final coords = CoordinateSpace(scale: 1.0, panOffset: Offset(50, 50));
 
       // With pan offset, the node appears at screen position (50, 50) to (130, 130)
-      clickHandler.handlePointerDown(
+      final result = clickHandler.handlePrimaryPointerDown(
         screenPosition: Offset(90, 90),
         nodes: nodes,
         coords: coords,
       );
       expect(selectionController.selected, {'node1'});
+      expect(result, isA<NodeClickResult>());
+    });
+
+    test('secondary click on node returns NodeClickResult', () {
+      final nodes = [
+        HitTestNode(id: 'node1', position: Offset.zero, size: 80),
+      ];
+      final coords = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
+
+      final result = clickHandler.handleSecondaryPointerDown(
+        screenPosition: Offset(40, 40),
+        nodes: nodes,
+        coords: coords,
+      );
+      expect(result, isA<NodeClickResult>());
+      expect((result as NodeClickResult).nodeId, 'node1');
+      // Secondary click should not dispatch selection actions
+      expect(selectionController.selected, isEmpty);
+    });
+
+    test('secondary click on background returns BackgroundClickResult', () {
+      final nodes = [
+        HitTestNode(id: 'node1', position: Offset.zero, size: 80),
+      ];
+      final coords = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
+
+      final result = clickHandler.handleSecondaryPointerDown(
+        screenPosition: Offset(200, 200),
+        nodes: nodes,
+        coords: coords,
+      );
+      expect(result, isA<BackgroundClickResult>());
+      expect(selectionController.selected, isEmpty);
     });
   });
 

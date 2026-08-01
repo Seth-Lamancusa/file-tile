@@ -11,6 +11,11 @@ class GridConfig {
   static const bool isValid = gridCellSize % renderGridSize == 0;
 }
 
+/// Configuration for the application UI layout.
+class AppConfig {
+  static const double appBarHeight = 40.0;
+}
+
 /// Encapsulates all coordinate transformations between screen and logical grid space.
 ///
 /// **Coordinate spaces:**

@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 typedef MenuItemCallback = void Function();
+typedef BarrierTapCallback = void Function(Offset position);
 
 class CascadingMenuItem {
   final String label;
@@ -34,6 +36,8 @@ class CascadingMenu extends StatefulWidget {
   final List<CascadingMenuItem> items;
   final Color backgroundColor;
   final VoidCallback? onClose;
+  final BarrierTapCallback? onBarrierLeftTapped;
+  final BarrierTapCallback? onBarrierRightTapped;
 
   const CascadingMenu({
     super.key,
@@ -41,6 +45,8 @@ class CascadingMenu extends StatefulWidget {
     required this.items,
     this.backgroundColor = const Color(0xFF1E1E1E),
     this.onClose,
+    this.onBarrierLeftTapped,
+    this.onBarrierRightTapped,
   });
 
   static void show(
@@ -49,6 +55,8 @@ class CascadingMenu extends StatefulWidget {
     required List<CascadingMenuItem> items,
     Color backgroundColor = const Color(0xFF1E1E1E),
     VoidCallback? onClose,
+    BarrierTapCallback? onBarrierLeftTapped,
+    BarrierTapCallback? onBarrierRightTapped,
   }) {
     showGeneralDialog(
       context: context,
@@ -61,6 +69,8 @@ class CascadingMenu extends StatefulWidget {
         items: items,
         backgroundColor: backgroundColor,
         onClose: onClose,
+        onBarrierLeftTapped: onBarrierLeftTapped,
+        onBarrierRightTapped: onBarrierRightTapped,
       ),
     );
   }
@@ -70,17 +80,26 @@ class CascadingMenu extends StatefulWidget {
 }
 
 class _CascadingMenuState extends State<CascadingMenu> {
+  void _handleBarrierPointerDown(PointerDownEvent event) {
+    Navigator.pop(context);
+    widget.onClose?.call();
+
+    if (event.buttons & kPrimaryButton != 0) {
+      widget.onBarrierLeftTapped?.call(event.position);
+    } else if (event.buttons & kSecondaryButton != 0) {
+      widget.onBarrierRightTapped?.call(event.position);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         Positioned.fill(
-          child: GestureDetector(
-            onTap: () {
-              Navigator.pop(context);
-              widget.onClose?.call();
-            },
+          child: Listener(
+            onPointerDown: _handleBarrierPointerDown,
             behavior: HitTestBehavior.opaque,
+            child: Container(),
           ),
         ),
         Positioned(

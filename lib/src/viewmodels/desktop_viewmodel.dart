@@ -5,6 +5,7 @@ import '../controllers/selection_controller.dart';
 import '../repositories/desktop_repository.dart';
 import '../repositories/file_system_desktop_repository.dart';
 import '../utils/coordinate_space.dart';
+import '../utils/grid_position.dart';
 
 /// Actions that can be performed on selected nodes.
 /// This is the single source of truth for select actions in the desktop view.
@@ -68,6 +69,9 @@ class DesktopViewModel extends ChangeNotifier {
 
   final List<String> _history = [];
   final List<String> _forwardHistory = [];
+
+  // Drag state for collision detection and revert on collision
+  final Map<String, Offset> _dragStartPositions = {};
 
   // Use GridConfig.gridCellSize instead; kept for backwards compatibility
   static const double gridSize = GridConfig.gridCellSize;
@@ -376,21 +380,25 @@ class DesktopViewModel extends ChangeNotifier {
       for (var e in unpositionedEntities) {
         final name = e.name;
 
-        while (usedPositions.contains(Offset(nextX, nextY))) {
-          nextX += gridSize;
-          if (nextX >= gridSize * 5) {
-            nextX = 0;
-            nextY += gridSize;
-          }
-        }
-
-        final pos = Offset(nextX, nextY);
+        final pos = findNextAvailablePosition(
+          Offset(nextX, nextY),
+          usedPositions,
+          gridSize,
+          5, // maxColumnsBeforeWrap
+        );
         usedPositions.add(pos);
         loadedNodes.add(DesktopNode(
           name: name,
           isDirectory: e.isDirectory,
           position: pos,
         ));
+
+        // Update nextX and nextY for the next search
+        nextX = pos.dx + gridSize;
+        if ((nextX / gridSize).round() >= 5) {
+          nextX = 0;
+          nextY = pos.dy + gridSize;
+        }
       }
 
       _nodes = List.unmodifiable(loadedNodes);
@@ -419,6 +427,15 @@ class DesktopViewModel extends ChangeNotifier {
     updated[index] = update(updated[index]);
     _nodes = List.unmodifiable(updated);
     return true;
+  }
+
+  /// Find a node by name, or null if not found.
+  DesktopNode? _findNode(String name) {
+    try {
+      return _nodes.firstWhere((n) => n.name == name);
+    } catch (e) {
+      return null;
+    }
   }
 
   void updateNodePosition(String name, Offset delta) {
@@ -544,6 +561,139 @@ class DesktopViewModel extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint("Failed to launch terminal: $e");
+    }
+  }
+
+  /// Save the current positions of selected nodes before dragging starts.
+  /// Call this from onPanDown to capture pre-drag state.
+  void startDrag(Set<String> nodeNames) {
+    _dragStartPositions.clear();
+    for (final nodeName in nodeNames) {
+      final node = _findNode(nodeName);
+      if (node != null) {
+        _dragStartPositions[nodeName] = node.position;
+      }
+    }
+  }
+
+  /// Attempt to move nodes to a directory or snap to grid with collision detection.
+  /// First checks if cursor is over a directory widget or breadcrumb to trigger a move.
+  /// If no drop target is found, snaps to grid and reverts on collision.
+  Future<void> completeOrRevertDrag(
+    Set<String> nodeNames, {
+    Offset? cursorPosition,
+  }) async {
+    if (nodeNames.isEmpty) return;
+
+    // Check if cursor is over a drop target (directory or breadcrumb)
+    // This will be called from the view with cursor position
+    // For now, we'll implement the snap-with-collision logic
+    // and the move logic will be added after implementing hit-testing
+
+    // Calculate what the snapped positions would be
+    final snappedPositions = <String, Offset>{};
+    for (final nodeName in nodeNames) {
+      final node = _findNode(nodeName);
+      if (node != null) {
+        snappedPositions[nodeName] = coords.snapToNearestGridCell(node.position);
+      }
+    }
+
+    // Get occupied positions (all nodes except those being moved)
+    final occupied = getOccupiedPositions(_nodes, excludeNames: nodeNames);
+
+    // Check if snapped positions would cause collisions
+    final snappedOffsets = snappedPositions.values.toList();
+    final canPlace = canPlaceNodes(snappedOffsets, occupied);
+
+    if (canPlace) {
+      // No collision - apply snaps
+      for (final entry in snappedPositions.entries) {
+        _replaceNode(entry.key, (n) => n.copyWith(position: entry.value));
+      }
+    } else {
+      // Collision detected - revert to pre-drag positions
+      for (final nodeName in nodeNames) {
+        if (_dragStartPositions.containsKey(nodeName)) {
+          _replaceNode(nodeName, (n) => n.copyWith(position: _dragStartPositions[nodeName]!));
+        }
+      }
+    }
+
+    notifyListeners();
+    _dragStartPositions.clear();
+    await _saveMetadata();
+  }
+
+  /// Move a set of nodes to a target directory and auto-place them.
+  /// Uses the same column-wrapping auto-placement logic.
+  /// Does not navigate to the target directory.
+  Future<void> moveNodesToDirectory(Set<String> nodeNames, String targetPath) async {
+    if (nodeNames.isEmpty || targetPath == _currentDirectory) return;
+
+    try {
+      // Move each node in the filesystem
+      for (final nodeName in nodeNames) {
+        final sourcePath = p.join(_currentDirectory, nodeName);
+        final destPath = p.join(targetPath, nodeName);
+        await _repository.rename(sourcePath, destPath);
+      }
+
+      // Update layout for source directory (remove moved nodes)
+      try {
+        final layout = await _repository.readLayout(_currentDirectory);
+        for (final nodeName in nodeNames) {
+          layout.remove(nodeName);
+        }
+        await _repository.updateLayout(_currentDirectory, layout);
+      } catch (e) {
+        debugPrint('Failed to update source directory layout: $e');
+      }
+
+      // Auto-place moved nodes in target directory
+      try {
+        final targetLayout = await _repository.readLayout(targetPath);
+        final usedPositions = <Offset>{};
+        for (final entry in targetLayout.entries) {
+          final pos = Offset(
+            entry.value['x']?.toDouble() ?? 0.0,
+            entry.value['y']?.toDouble() ?? 0.0,
+          );
+          usedPositions.add(pos);
+        }
+
+        // Find positions for moved nodes
+        double nextX = 0;
+        double nextY = 0;
+        for (final nodeName in nodeNames) {
+          final pos = findNextAvailablePosition(
+            Offset(nextX, nextY),
+            usedPositions,
+            gridSize,
+            5, // maxColumnsBeforeWrap
+          );
+          usedPositions.add(pos);
+          targetLayout[nodeName] = {'x': pos.dx, 'y': pos.dy};
+
+          // Update nextX and nextY for the next search
+          nextX = pos.dx + gridSize;
+          if ((nextX / gridSize).round() >= 5) {
+            nextX = 0;
+            nextY = pos.dy + gridSize;
+          }
+        }
+
+        // Save target directory layout
+        await _repository.updateLayout(targetPath, targetLayout);
+      } catch (e) {
+        debugPrint('Failed to auto-place in target directory: $e');
+      }
+
+      // Reload source directory (stays in current view)
+      await loadDirectory(_currentDirectory, addToHistory: false, force: true);
+    } catch (e) {
+      debugPrint('Error moving nodes to directory: $e');
+      _setError("Couldn't move items to that directory");
     }
   }
 

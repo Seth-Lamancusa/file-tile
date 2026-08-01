@@ -33,15 +33,17 @@ class ClickHandler {
 
   ClickHandler({required this.selectionController});
 
-  /// Process a pointer down event on the canvas.
-  /// Returns true if the event was handled (a node was clicked), false otherwise.
-  bool handlePointerDown({
+  /// Process a primary (left) click event on the canvas.
+  /// Performs hit testing and dispatches selection actions via selectionController.
+  /// Returns a ClickResult indicating what was hit and what action was taken.
+  ClickResult handlePrimaryPointerDown({
     required Offset screenPosition,
     required List<HitTestNode> nodes,
     required CoordinateSpace coords,
   }) {
     final modifiers = ClickModifiers.fromHardwareKeyboard();
     final action = ClickActionMapper.mapModifiersToAction(modifiers);
+    final logicalPos = coords.screenToLogical(screenPosition);
 
     // Find which node (if any) was clicked.
     String? clickedNodeId;
@@ -57,12 +59,13 @@ class ClickHandler {
       if (action == ClickAction.selectSingle) {
         selectionController.clearSelection();
       }
-      return false;
+      return BackgroundClickResult(action: action, logicalPosition: logicalPos);
     }
 
     // A node was clicked; dispatch based on action.
     switch (action) {
       case ClickAction.selectSingle:
+        // Always select single, even if already selected (deselect other items in multi-selection)
         selectionController.selectSingle(clickedNodeId);
         break;
       case ClickAction.toggleSelect:
@@ -75,7 +78,47 @@ class ClickHandler {
         break;
     }
 
-    return true;
+    return NodeClickResult(
+      nodeId: clickedNodeId,
+      action: action,
+      logicalPosition: logicalPos,
+    );
+  }
+
+  /// Process a secondary (right) click event for context menus.
+  /// Performs hit testing and selects the clicked node (deselecting others).
+  /// Returns a ClickResult indicating what was hit (used to show appropriate context menu).
+  ClickResult handleSecondaryPointerDown({
+    required Offset screenPosition,
+    required List<HitTestNode> nodes,
+    required CoordinateSpace coords,
+  }) {
+    final logicalPos = coords.screenToLogical(screenPosition);
+
+    // Find which node (if any) was clicked.
+    String? clickedNodeId;
+    for (final node in nodes) {
+      if (node.hitsPoint(screenPosition, coords)) {
+        clickedNodeId = node.id;
+        break;
+      }
+    }
+
+    if (clickedNodeId == null) {
+      return BackgroundClickResult(
+        action: ClickAction.noOp,
+        logicalPosition: logicalPos,
+      );
+    }
+
+    // Select the right-clicked node, deselecting all others
+    selectionController.selectSingle(clickedNodeId);
+
+    return NodeClickResult(
+      nodeId: clickedNodeId,
+      action: ClickAction.noOp,
+      logicalPosition: logicalPos,
+    );
   }
 
   /// Handle range selection (Shift+click).

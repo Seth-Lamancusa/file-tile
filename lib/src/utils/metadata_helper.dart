@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'json_file_manager.dart';
+import '../models/new_element_placement_config.dart';
 
 class MetadataManager extends JsonFileManager {
   late Map<String, dynamic> _data;
@@ -31,11 +32,27 @@ class MetadataManager extends JsonFileManager {
       throw FormatException('layout must be an object');
     }
 
+    final config = data['newElementPlacementConfig'];
+    if (config != null) {
+      if (config is! Map) {
+        throw FormatException('newElementPlacementConfig must be an object');
+      }
+      try {
+        NewElementPlacementConfig.fromJson((config as Map).cast<String, dynamic>());
+      } on ArgumentError catch (e) {
+        throw FormatException('Invalid newElementPlacementConfig: ${e.message}');
+      }
+    }
+
     return data;
   }
 
   @override
-  Map<String, dynamic> getDefaultData() => {'layout': {}, 'version': '1.0'};
+  Map<String, dynamic> getDefaultData() => {
+        'layout': {},
+        'newElementPlacementConfig': NewElementPlacementConfig.defaultConfig().toJson(),
+        'version': '1.0'
+      };
 
   Future<void> load() async {
     _data = await loadData();
@@ -43,8 +60,21 @@ class MetadataManager extends JsonFileManager {
 
   Map<String, dynamic> get layout => (_data['layout'] as Map).cast<String, dynamic>();
 
+  NewElementPlacementConfig get newElementPlacementConfig {
+    final configData = _data['newElementPlacementConfig'];
+    if (configData != null) {
+      return NewElementPlacementConfig.fromJson((configData as Map).cast<String, dynamic>());
+    }
+    return NewElementPlacementConfig.defaultConfig();
+  }
+
   Future<void> updateLayout(Map<String, dynamic> newLayout) async {
     _data['layout'] = newLayout;
+    await save(_data);
+  }
+
+  Future<void> updateNewElementPlacementConfig(NewElementPlacementConfig config) async {
+    _data['newElementPlacementConfig'] = config.toJson();
     await save(_data);
   }
 

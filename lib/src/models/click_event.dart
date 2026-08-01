@@ -54,6 +54,36 @@ enum ClickAction {
   noOp,
 }
 
+/// Result of hit testing a click event.
+sealed class ClickResult {
+  /// The logical position where the click occurred (before snapping).
+  final Offset logicalPosition;
+
+  ClickResult({required this.logicalPosition});
+}
+
+/// Click hit a node; ClickHandler has already dispatched selection action.
+class NodeClickResult extends ClickResult {
+  final String nodeId;
+  final ClickAction action;
+
+  NodeClickResult({
+    required this.nodeId,
+    required this.action,
+    required super.logicalPosition,
+  });
+}
+
+/// Click hit empty canvas.
+class BackgroundClickResult extends ClickResult {
+  final ClickAction action;
+
+  BackgroundClickResult({
+    required this.action,
+    required super.logicalPosition,
+  });
+}
+
 /// Maps keyboard modifiers to semantic actions.
 /// Configurable so it can be loaded from saved settings in the future.
 class ClickActionMapper {

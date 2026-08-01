@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:path/path.dart' as p;
 import '../controllers/click_handler.dart';
+import '../models/click_event.dart';
 import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
@@ -21,6 +22,10 @@ class DesktopView extends StatefulWidget {
 class _DesktopViewState extends State<DesktopView> {
   late FocusNode _focusNode;
   late ClickHandler _clickHandler;
+  Offset? _currentDragCursorPos;
+  String? _dragTargetNodeName; // Name of the directory being hovered as a drop target
+  String? _dragTargetBreadcrumbPath; // Path of the breadcrumb being hovered as a drop target
+  final Map<String, GlobalKey> _breadcrumbKeys = {}; // Map of path -> GlobalKey for hit-testing
 
   @override
   void initState() {
@@ -50,6 +55,51 @@ class _DesktopViewState extends State<DesktopView> {
     return KeyEventResult.ignored;
   }
 
+  Set<_BorderSide> _getVisibleBorders(DesktopNode node, DesktopViewModel viewModel) {
+    if (!viewModel.isNodeSelected(node.name)) {
+      return {_BorderSide.top, _BorderSide.right, _BorderSide.bottom, _BorderSide.left};
+    }
+
+    final visibleBorders = <_BorderSide>{_BorderSide.top, _BorderSide.right, _BorderSide.bottom, _BorderSide.left};
+    final nodeColor = node.color ?? (node.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
+    final gridSize = GridConfig.gridCellSize;
+
+    // Check each neighbor direction and suppress borders if adjacent selected node has same color
+    for (final neighbor in viewModel.nodes) {
+      if (neighbor.name == node.name) continue;
+
+      final isNeighborSelected = viewModel.isNodeSelected(neighbor.name);
+      if (!isNeighborSelected) continue;
+
+      final neighborColor = neighbor.color ?? (neighbor.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
+      final isSameColor = nodeColor == neighborColor;
+      if (!isSameColor) continue;
+
+      final dx = neighbor.position.dx - node.position.dx;
+      final dy = neighbor.position.dy - node.position.dy;
+      const tolerance = 1.0;
+
+      // Top neighbor (dy = -gridSize, dx = 0)
+      if ((dy + gridSize).abs() < tolerance && dx.abs() < tolerance) {
+        visibleBorders.remove(_BorderSide.top);
+      }
+      // Right neighbor (dx = gridSize, dy = 0)
+      else if ((dx - gridSize).abs() < tolerance && dy.abs() < tolerance) {
+        visibleBorders.remove(_BorderSide.right);
+      }
+      // Bottom neighbor (dy = gridSize, dx = 0)
+      else if ((dy - gridSize).abs() < tolerance && dx.abs() < tolerance) {
+        visibleBorders.remove(_BorderSide.bottom);
+      }
+      // Left neighbor (dx = -gridSize, dy = 0)
+      else if ((dx + gridSize).abs() < tolerance && dy.abs() < tolerance) {
+        visibleBorders.remove(_BorderSide.left);
+      }
+    }
+
+    return visibleBorders;
+  }
+
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<DesktopViewModel>();
@@ -68,7 +118,7 @@ class _DesktopViewState extends State<DesktopView> {
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1E1E1E),
-        toolbarHeight: 40,
+        toolbarHeight: AppConfig.appBarHeight,
         title: Row(
           children: [
             IconButton(
@@ -120,21 +170,41 @@ class _DesktopViewState extends State<DesktopView> {
           builder: (context, constraints) {
             return Listener(
             onPointerDown: (event) {
+              // Adjust click position from window to canvas coordinates
+              final canvasPosition = event.position - Offset(0, AppConfig.appBarHeight);
+
+              // Build hit test nodes once for both left and right clicks
+              final nodes = viewModel.nodes.map((node) {
+                return HitTestNode(
+                  id: node.name,
+                  position: node.position,
+                  size: GridConfig.gridCellSize,
+                );
+              }).toList();
+
               // Handle left-click for selection
               if (event.buttons & kPrimaryButton != 0) {
-                final nodes = viewModel.nodes.map((node) {
-                  return HitTestNode(
-                    id: node.name,
-                    position: node.position,
-                    size: GridConfig.gridCellSize,
-                  );
-                }).toList();
-
-                _clickHandler.handlePointerDown(
-                  screenPosition: event.position,
+                _clickHandler.handlePrimaryPointerDown(
+                  screenPosition: canvasPosition,
                   nodes: nodes,
                   coords: viewModel.coords,
                 );
+              }
+              // Handle right-click for context menu
+              else if (event.buttons & kSecondaryButton != 0) {
+                final result = _clickHandler.handleSecondaryPointerDown(
+                  screenPosition: canvasPosition,
+                  nodes: nodes,
+                  coords: viewModel.coords,
+                );
+
+                switch (result) {
+                  case NodeClickResult(nodeId: final nodeId):
+                    // Click handler already selected the node
+                    _showNodeContextMenu(context, event.position, viewModel);
+                  case BackgroundClickResult():
+                    _showBackgroundContextMenu(context, event.position, result.logicalPosition, viewModel);
+                }
               }
             },
             onPointerSignal: (pointerSignal) {
@@ -175,9 +245,6 @@ class _DesktopViewState extends State<DesktopView> {
                     onPanUpdate: (details) {
                       viewModel.offset = viewModel.offset + details.delta;
                     },
-                    onSecondaryTapDown: (details) {
-                      _showBackgroundContextMenu(context, details.globalPosition, details.localPosition, viewModel);
-                    },
                     child: ClipRect(
                       child: CustomPaint(
                         size: Size.infinite,
@@ -192,21 +259,109 @@ class _DesktopViewState extends State<DesktopView> {
                 ...viewModel.nodes.map((node) {
                   final screenPos = viewModel.coords.logicalToScreen(node.position);
                   final isSelected = viewModel.isNodeSelected(node.name);
+                  final visibleBorders = _getVisibleBorders(node, viewModel);
                   return Positioned(
                     left: screenPos.dx,
                     top: screenPos.dy,
                     child: GestureDetector(
+                      onPanDown: (_) {
+                        // Determine which nodes are being dragged
+                        final nodesToDrag = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
+                          ? viewModel.selectedNodeNames
+                          : {node.name};
+                        viewModel.startDrag(nodesToDrag);
+                        _currentDragCursorPos = null;
+                      },
                       onPanUpdate: (details) {
-                        viewModel.updateNodePosition(node.name, viewModel.coords.screenDeltaToLogicalDelta(details.delta));
-                      },
-                      onPanEnd: (_) {
-                        viewModel.snapNodeToGrid(node.name);
-                      },
-                      onSecondaryTapDown: (details) {
-                        if (!isSelected) {
-                          viewModel.selectionController.selectSingle(node.name);
+                        _currentDragCursorPos = details.globalPosition;
+                        final delta = viewModel.coords.screenDeltaToLogicalDelta(details.delta);
+
+                        // Determine which nodes are being dragged
+                        final nodesDragging = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
+                          ? viewModel.selectedNodeNames
+                          : {node.name};
+
+                        // If this node is selected and there are multiple selections, drag all
+                        if (viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1) {
+                          for (final selectedNodeId in viewModel.selectedNodeNames) {
+                            viewModel.updateNodePosition(selectedNodeId, delta);
+                          }
+                        } else {
+                          // Single node drag
+                          viewModel.updateNodePosition(node.name, delta);
                         }
-                        _showNodeContextMenu(context, details.globalPosition, viewModel);
+
+                        // Update which directory or breadcrumb is being hovered as a drop target
+                        String? targetNodeName;
+                        String? targetBreadcrumbPath;
+
+                        // Check breadcrumbs first (they're in the AppBar, higher priority)
+                        final breadcrumbPath = _hitTestBreadcrumb(details.globalPosition);
+                        if (breadcrumbPath != null && !nodesDragging.contains(p.basename(breadcrumbPath))) {
+                          targetBreadcrumbPath = breadcrumbPath;
+                        } else {
+                          // Check directory widgets in the grid
+                          final targetDir = _hitTestDirectoryWidget(
+                            details.globalPosition,
+                            viewModel,
+                            excludeNodeNames: nodesDragging,
+                          );
+                          if (targetDir != null) {
+                            for (final n in viewModel.nodes) {
+                              if (p.join(viewModel.currentDirectory, n.name) == targetDir) {
+                                targetNodeName = n.name;
+                                break;
+                              }
+                            }
+                          }
+                        }
+
+                        setState(() {
+                          _dragTargetNodeName = targetNodeName;
+                          _dragTargetBreadcrumbPath = targetBreadcrumbPath;
+                        });
+                      },
+                      onPanEnd: (details) async {
+                        // Determine which nodes were being dragged
+                        final nodesDragged = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
+                          ? viewModel.selectedNodeNames
+                          : {node.name};
+
+                        // Check breadcrumbs first (higher priority than grid)
+                        final breadcrumbPath = _hitTestBreadcrumb(details.globalPosition);
+                        if (breadcrumbPath != null && !nodesDragged.contains(p.basename(breadcrumbPath))) {
+                          await viewModel.moveNodesToDirectory(nodesDragged, breadcrumbPath);
+                          setState(() {
+                            _dragTargetNodeName = null;
+                            _dragTargetBreadcrumbPath = null;
+                          });
+                          _currentDragCursorPos = null;
+                          return;
+                        }
+
+                        // Check directory widgets in the grid
+                        final targetDirectory = _hitTestDirectoryWidget(
+                          details.globalPosition,
+                          viewModel,
+                          excludeNodeNames: nodesDragged,
+                        );
+                        if (targetDirectory != null) {
+                          await viewModel.moveNodesToDirectory(nodesDragged, targetDirectory);
+                          setState(() {
+                            _dragTargetNodeName = null;
+                            _dragTargetBreadcrumbPath = null;
+                          });
+                          _currentDragCursorPos = null;
+                          return;
+                        }
+
+                        // No drop target found - snap to grid with collision detection
+                        await viewModel.completeOrRevertDrag(nodesDragged);
+                        setState(() {
+                          _dragTargetNodeName = null;
+                          _dragTargetBreadcrumbPath = null;
+                        });
+                        _currentDragCursorPos = null;
                       },
                       onDoubleTap: node.isDirectory
                         ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
@@ -218,6 +373,8 @@ class _DesktopViewState extends State<DesktopView> {
                         directoryColor: viewModel.directoryColor,
                         fileColor: viewModel.fileColor,
                         isSelected: isSelected,
+                        visibleBorders: visibleBorders,
+                        isDragTarget: _dragTargetNodeName == node.name,
                       ),
                     ),
                   );
@@ -242,29 +399,66 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  void _showBackgroundContextMenu(BuildContext context, Offset globalPosition, Offset localPosition, DesktopViewModel viewModel) {
+  void _showBackgroundContextMenu(BuildContext context, Offset globalPosition, Offset logicalPosition, DesktopViewModel viewModel) {
     CascadingMenu.show(
       context,
       position: globalPosition,
+      onBarrierLeftTapped: (globalPos) {
+        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final nodes = viewModel.nodes.map((node) {
+          return HitTestNode(
+            id: node.name,
+            position: node.position,
+            size: GridConfig.gridCellSize,
+          );
+        }).toList();
+        _clickHandler.handlePrimaryPointerDown(
+          screenPosition: canvasPosition,
+          nodes: nodes,
+          coords: viewModel.coords,
+        );
+      },
+      onBarrierRightTapped: (globalPos) {
+        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final nodes = viewModel.nodes.map((node) {
+          return HitTestNode(
+            id: node.name,
+            position: node.position,
+            size: GridConfig.gridCellSize,
+          );
+        }).toList();
+        final result = _clickHandler.handleSecondaryPointerDown(
+          screenPosition: canvasPosition,
+          nodes: nodes,
+          coords: viewModel.coords,
+        );
+        switch (result) {
+          case NodeClickResult(nodeId: final nodeId):
+            if (!viewModel.isNodeSelected(nodeId)) {
+              viewModel.selectionController.selectSingle(nodeId);
+            }
+            _showNodeContextMenu(context, globalPos, viewModel);
+          case BackgroundClickResult():
+            _showBackgroundContextMenu(context, globalPos, result.logicalPosition, viewModel);
+        }
+      },
       items: [
         CascadingMenuItem(
           label: 'New Folder',
           icon: Icons.create_new_folder,
           onTap: () {
-            final logicalPos = viewModel.coords.screenToLogical(localPosition);
-            final snappedPos = viewModel.coords.snapToCellCorner(logicalPos);
+            final snappedPos = viewModel.coords.snapToCellCorner(logicalPosition);
             final (gridX, gridY) = viewModel.coords.logicalPosToGridIndices(snappedPos);
-            debugPrint('[CREATE FOLDER] local: (${localPosition.dx.toStringAsFixed(1)}, ${localPosition.dy.toStringAsFixed(1)}) | logical: (${logicalPos.dx.toStringAsFixed(1)}, ${logicalPos.dy.toStringAsFixed(1)}) | snapped: (${snappedPos.dx.toStringAsFixed(1)}, ${snappedPos.dy.toStringAsFixed(1)}) | grid: ($gridX, $gridY)');
-            _promptCreate(context, viewModel, isDirectory: true, gridPosition: snappedPos, originalLogicalPos: logicalPos);
+            debugPrint('[CREATE FOLDER] logical: (${logicalPosition.dx.toStringAsFixed(1)}, ${logicalPosition.dy.toStringAsFixed(1)}) | snapped: (${snappedPos.dx.toStringAsFixed(1)}, ${snappedPos.dy.toStringAsFixed(1)}) | grid: ($gridX, $gridY)');
+            _promptCreate(context, viewModel, isDirectory: true, gridPosition: snappedPos, originalLogicalPos: logicalPosition);
           },
         ),
         CascadingMenuItem(
           label: 'New File',
           icon: Icons.note_add,
           onTap: () {
-            final logicalPos = viewModel.coords.screenToLogical(localPosition);
-            final snappedPos = viewModel.coords.snapToCellCorner(logicalPos);
-            _promptCreate(context, viewModel, isDirectory: false, gridPosition: snappedPos, originalLogicalPos: logicalPos);
+            final snappedPos = viewModel.coords.snapToCellCorner(logicalPosition);
+            _promptCreate(context, viewModel, isDirectory: false, gridPosition: snappedPos, originalLogicalPos: logicalPosition);
           },
         ),
         CascadingMenuItem.divider(),
@@ -427,6 +621,45 @@ class _DesktopViewState extends State<DesktopView> {
     CascadingMenu.show(
       context,
       position: position,
+      onBarrierLeftTapped: (globalPos) {
+        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final nodes = viewModel.nodes.map((node) {
+          return HitTestNode(
+            id: node.name,
+            position: node.position,
+            size: GridConfig.gridCellSize,
+          );
+        }).toList();
+        _clickHandler.handlePrimaryPointerDown(
+          screenPosition: canvasPosition,
+          nodes: nodes,
+          coords: viewModel.coords,
+        );
+      },
+      onBarrierRightTapped: (globalPos) {
+        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final nodes = viewModel.nodes.map((node) {
+          return HitTestNode(
+            id: node.name,
+            position: node.position,
+            size: GridConfig.gridCellSize,
+          );
+        }).toList();
+        final result = _clickHandler.handleSecondaryPointerDown(
+          screenPosition: canvasPosition,
+          nodes: nodes,
+          coords: viewModel.coords,
+        );
+        switch (result) {
+          case NodeClickResult(nodeId: final nodeId):
+            if (!viewModel.isNodeSelected(nodeId)) {
+              viewModel.selectionController.selectSingle(nodeId);
+            }
+            _showNodeContextMenu(context, globalPos, viewModel);
+          case BackgroundClickResult():
+            _showBackgroundContextMenu(context, globalPos, result.logicalPosition, viewModel);
+        }
+      },
       items: items,
     );
   }
@@ -663,13 +896,18 @@ class _DesktopViewState extends State<DesktopView> {
     final path = viewModel.currentDirectory;
     final parts = p.split(path);
     final List<Widget> widgets = [];
+    _breadcrumbKeys.clear();
 
     String currentPath = '';
     if (path.startsWith('/')) {
       currentPath = '/';
+      final key = GlobalKey();
+      _breadcrumbKeys['/'] = key;
       widgets.add(BreadcrumbSegment(
+        key: key,
         label: 'Root',
         onTap: () => viewModel.loadDirectory('/'),
+        isDragTarget: _dragTargetBreadcrumbPath == '/',
       ));
     }
 
@@ -679,16 +917,76 @@ class _DesktopViewState extends State<DesktopView> {
 
       currentPath = p.join(currentPath, part);
       final thisPath = currentPath;
+      final key = GlobalKey();
+      _breadcrumbKeys[thisPath] = key;
       widgets.add(BreadcrumbSegment(
+        key: key,
         label: part,
         onTap: () => viewModel.loadDirectory(thisPath),
         isLast: i == parts.length - 1,
+        isDragTarget: _dragTargetBreadcrumbPath == thisPath,
       ));
     }
 
     return widgets;
   }
+
+  /// Hit-test cursor position against directory widgets in the grid.
+  /// Returns the path of the directory if cursor is over one, or null.
+  /// Excludes directories that are currently being dragged.
+  String? _hitTestDirectoryWidget(
+    Offset globalPos,
+    DesktopViewModel viewModel, {
+    Set<String> excludeNodeNames = const {},
+  }) {
+    // Convert global position to canvas position
+    final canvasPos = globalPos - Offset(0, AppConfig.appBarHeight);
+
+    // Test each node to see if cursor is over a directory
+    for (final node in viewModel.nodes) {
+      if (!node.isDirectory) continue;
+      if (excludeNodeNames.contains(node.name)) continue;
+
+      final screenPos = viewModel.coords.logicalToScreen(node.position);
+      final scaledSize = GridConfig.gridCellSize * viewModel.scale;
+      final rect = Rect.fromLTWH(screenPos.dx, screenPos.dy, scaledSize, scaledSize);
+
+      if (rect.contains(canvasPos)) {
+        final targetPath = p.join(viewModel.currentDirectory, node.name);
+        return targetPath;
+      }
+    }
+
+    return null;
+  }
+
+  /// Hit-test cursor position against breadcrumb widgets.
+  /// Returns the path of the breadcrumb if cursor is over one, or null.
+  String? _hitTestBreadcrumb(Offset globalPos) {
+    for (final entry in _breadcrumbKeys.entries) {
+      final path = entry.key;
+      final key = entry.value;
+      final context = key.currentContext;
+      if (context == null) continue;
+
+      final renderBox = context.findRenderObject() as RenderBox?;
+      if (renderBox == null) continue;
+
+      // Get the global position and size of the breadcrumb
+      final globalOffset = renderBox.localToGlobal(Offset.zero);
+      final size = renderBox.size;
+      final rect = Rect.fromLTWH(globalOffset.dx, globalOffset.dy, size.width, size.height);
+
+      if (rect.contains(globalPos)) {
+        return path;
+      }
+    }
+
+    return null;
+  }
 }
+
+enum _BorderSide { top, right, bottom, left }
 
 class _DesktopNodeWidget extends StatelessWidget {
   final DesktopNode node;
@@ -697,6 +995,8 @@ class _DesktopNodeWidget extends StatelessWidget {
   final Color directoryColor;
   final Color fileColor;
   final bool isSelected;
+  final Set<_BorderSide> visibleBorders;
+  final bool isDragTarget;
 
   const _DesktopNodeWidget({
     required this.node,
@@ -705,6 +1005,8 @@ class _DesktopNodeWidget extends StatelessWidget {
     required this.directoryColor,
     required this.fileColor,
     this.isSelected = false,
+    this.visibleBorders = const {_BorderSide.top, _BorderSide.right, _BorderSide.bottom, _BorderSide.left},
+    this.isDragTarget = false,
   });
 
   @override
@@ -712,19 +1014,36 @@ class _DesktopNodeWidget extends StatelessWidget {
     final size = gridSize * scale;
     final effectiveColor = node.color ?? (node.isDirectory ? directoryColor : fileColor);
 
+    final borderColor = isSelected
+      ? effectiveColor.withValues(alpha: 0.8)
+      : Colors.white.withValues(alpha: 0.05);
+    final borderWidth = isSelected ? 2.0 : 0.5;
+
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: isSelected
+        color: isDragTarget
           ? effectiveColor.withValues(alpha: 0.15)
-          : Colors.white.withValues(alpha: 0.02),
-        border: Border.all(
-          color: isSelected
-            ? effectiveColor.withValues(alpha: 0.8)
-            : Colors.white.withValues(alpha: 0.05),
-          width: isSelected ? 2.0 : 0.5,
-        ),
+          : isSelected
+            ? effectiveColor.withValues(alpha: 0.15)
+            : Colors.white.withValues(alpha: 0.02),
+        border: isDragTarget
+          ? Border.all(color: Colors.transparent)
+          : Border(
+              top: visibleBorders.contains(_BorderSide.top)
+                ? BorderSide(color: borderColor, width: borderWidth)
+                : BorderSide.none,
+              right: visibleBorders.contains(_BorderSide.right)
+                ? BorderSide(color: borderColor, width: borderWidth)
+                : BorderSide.none,
+              bottom: visibleBorders.contains(_BorderSide.bottom)
+                ? BorderSide(color: borderColor, width: borderWidth)
+                : BorderSide.none,
+              left: visibleBorders.contains(_BorderSide.left)
+                ? BorderSide(color: borderColor, width: borderWidth)
+                : BorderSide.none,
+            ),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
