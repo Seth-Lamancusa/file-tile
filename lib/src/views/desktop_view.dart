@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,6 +28,12 @@ class _DesktopViewState extends State<DesktopView> {
   String? _dragTargetNodeName; // Name of the directory being hovered as a drop target
   String? _dragTargetBreadcrumbPath; // Path of the breadcrumb being hovered as a drop target
   final Map<String, GlobalKey> _breadcrumbKeys = {}; // Map of path -> GlobalKey for hit-testing
+  BoxConstraints? _canvasConstraints;
+  Timer? _autoScrollTimer;
+  Map<String, Offset> _nodeOffsetFromCursor = {};
+  static const double _autoScrollMaxSpeed = 17.0;
+  static const double _autoScrollEdgeZoneMin = 20.0;
+  static const double _autoScrollEdgeZoneMax = 60.0;
 
   @override
   void initState() {
@@ -42,7 +49,64 @@ class _DesktopViewState extends State<DesktopView> {
   @override
   void dispose() {
     _focusNode.dispose();
+    _autoScrollTimer?.cancel();
     super.dispose();
+  }
+
+  double _calculateRamp(double distance) {
+    if (distance <= _autoScrollEdgeZoneMin) return 1.0;
+    if (distance >= _autoScrollEdgeZoneMax) return 0.0;
+    return (_autoScrollEdgeZoneMax - distance) /
+        (_autoScrollEdgeZoneMax - _autoScrollEdgeZoneMin);
+  }
+
+  void _startAutoScrollTimer(DesktopViewModel viewModel) {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (_currentDragCursorPos == null || _canvasConstraints == null) return;
+
+      final pos = _currentDragCursorPos!;
+      final constraints = _canvasConstraints!;
+
+      // Keep dragged nodes pinned to cursor (even if mouse isn't moving)
+      for (final entry in _nodeOffsetFromCursor.entries) {
+        final nodeName = entry.key;
+        final offset = entry.value;
+        final targetScreenPos = pos + offset;
+        final targetLogicalPos = viewModel.coords.screenToLogical(targetScreenPos);
+        final n = viewModel.nodes.firstWhere((x) => x.name == nodeName);
+        final delta = targetLogicalPos - n.position;
+        viewModel.updateNodePosition(nodeName, delta);
+      }
+
+      final topDist = pos.dy - AppConfig.appBarHeight;
+      final bottomDist = constraints.maxHeight - pos.dy;
+      final leftDist = pos.dx;
+      final rightDist = constraints.maxWidth - pos.dx;
+
+      final verticalRamp = (topDist < _autoScrollEdgeZoneMax)
+          ? _calculateRamp(topDist)
+          : ((bottomDist < _autoScrollEdgeZoneMax)
+              ? -_calculateRamp(bottomDist)
+              : 0.0);
+
+      final horizontalRamp = (leftDist < _autoScrollEdgeZoneMax)
+          ? _calculateRamp(leftDist)
+          : ((rightDist < _autoScrollEdgeZoneMax)
+              ? -_calculateRamp(rightDist)
+              : 0.0);
+
+      if (verticalRamp != 0.0 || horizontalRamp != 0.0) {
+        final scrollDelta =
+            Offset(horizontalRamp * _autoScrollMaxSpeed, verticalRamp * _autoScrollMaxSpeed);
+        viewModel.offset = viewModel.offset + scrollDelta;
+      }
+    });
+  }
+
+  void _stopAutoScrollTimer() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
@@ -169,6 +233,7 @@ class _DesktopViewState extends State<DesktopView> {
         onKeyEvent: _handleKeyEvent,
         child: LayoutBuilder(
           builder: (context, constraints) {
+            _canvasConstraints = constraints;
             return Listener(
             onPointerDown: (event) {
               // Adjust click position from window to canvas coordinates
@@ -296,37 +361,49 @@ class _DesktopViewState extends State<DesktopView> {
                         }).toList();
                         _clickHandler.handleNodeTap(nodeId: node.name, nodes: hitTestNodes);
                       },
-                      onPanDown: (_) {
+                      onPanDown: (details) {
                         // Determine which nodes are being dragged
                         final nodesToDrag = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
                           ? viewModel.selectedNodeNames
                           : {node.name};
                         viewModel.startDrag(nodesToDrag);
-                        _currentDragCursorPos = null;
+                        _currentDragCursorPos = details.globalPosition;
+
+                        // Capture offset from cursor to each node's screen position
+                        _nodeOffsetFromCursor.clear();
+                        for (final nodeName in nodesToDrag) {
+                          final n = viewModel.nodes.firstWhere((x) => x.name == nodeName);
+                          final nodeScreenPos = viewModel.coords.logicalToScreen(n.position);
+                          _nodeOffsetFromCursor[nodeName] = nodeScreenPos - details.globalPosition;
+                        }
+
+                        _startAutoScrollTimer(viewModel);
                       },
                       onPanCancel: () {
                         // Pan lost the gesture arena to the tap recognizer (or was otherwise
                         // interrupted) - clear the drag state we speculatively captured.
                         viewModel.cancelDrag();
                         _currentDragCursorPos = null;
+                        _nodeOffsetFromCursor.clear();
+                        _stopAutoScrollTimer();
                       },
                       onPanUpdate: (details) {
                         _currentDragCursorPos = details.globalPosition;
-                        final delta = viewModel.coords.screenDeltaToLogicalDelta(details.delta);
 
                         // Determine which nodes are being dragged
                         final nodesDragging = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
                           ? viewModel.selectedNodeNames
                           : {node.name};
 
-                        // If this node is selected and there are multiple selections, drag all
-                        if (viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1) {
-                          for (final selectedNodeId in viewModel.selectedNodeNames) {
-                            viewModel.updateNodePosition(selectedNodeId, delta);
+                        // Keep dragged nodes pinned to cursor with their saved offset
+                        for (final nodeName in nodesDragging) {
+                          if (_nodeOffsetFromCursor.containsKey(nodeName)) {
+                            final targetScreenPos = details.globalPosition + _nodeOffsetFromCursor[nodeName]!;
+                            final targetLogicalPos = viewModel.coords.screenToLogical(targetScreenPos);
+                            final n = viewModel.nodes.firstWhere((x) => x.name == nodeName);
+                            final delta = targetLogicalPos - n.position;
+                            viewModel.updateNodePosition(nodeName, delta);
                           }
-                        } else {
-                          // Single node drag
-                          viewModel.updateNodePosition(node.name, delta);
                         }
 
                         // Update which directory or breadcrumb is being hovered as a drop target
@@ -360,6 +437,8 @@ class _DesktopViewState extends State<DesktopView> {
                         });
                       },
                       onPanEnd: (details) async {
+                        _stopAutoScrollTimer();
+                        _nodeOffsetFromCursor.clear();
                         // Determine which nodes were being dragged
                         final nodesDragged = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
                           ? viewModel.selectedNodeNames
