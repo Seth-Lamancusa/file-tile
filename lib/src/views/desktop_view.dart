@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
+import '../utils/coordinate_space.dart';
 
 export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction;
 
@@ -54,6 +55,16 @@ class _DesktopViewState extends State<DesktopView> {
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<DesktopViewModel>();
+
+    final error = viewModel.lastError;
+    if (error != null) {
+      viewModel.clearError();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+        }
+      });
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -145,14 +156,18 @@ class _DesktopViewState extends State<DesktopView> {
                 Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () {
+                    onTapDown: (details) {
+                      final pixelPos = details.localPosition;
+                      final logicalPos = viewModel.coords.screenToLogical(pixelPos);
+                      final (gridX, gridY) = viewModel.coords.logicalPosToGridIndices(logicalPos);
+                      debugPrint('[LEFT CLICK] local: (${pixelPos.dx.toStringAsFixed(1)}, ${pixelPos.dy.toStringAsFixed(1)}) → logical: (${logicalPos.dx.toStringAsFixed(1)}, ${logicalPos.dy.toStringAsFixed(1)}) → grid: ($gridX, $gridY)');
                       viewModel.deselectNode();
                     },
                     onPanUpdate: (details) {
                       viewModel.offset = viewModel.offset + details.delta;
                     },
                     onSecondaryTapDown: (details) {
-                      _showBackgroundContextMenu(context, details.globalPosition, viewModel);
+                      _showBackgroundContextMenu(context, details.globalPosition, details.localPosition, viewModel);
                     },
                     child: ClipRect(
                       child: CustomPaint(
@@ -166,14 +181,14 @@ class _DesktopViewState extends State<DesktopView> {
                   ),
                 ),
                 ...viewModel.nodes.map((node) {
-                  final screenPos = viewModel.offset + (node.position * viewModel.scale);
+                  final screenPos = viewModel.coords.logicalToScreen(node.position);
                   final isSelected = viewModel.isNodeSelected(node.name);
                   return Positioned(
                     left: screenPos.dx,
                     top: screenPos.dy,
                     child: GestureDetector(
                       onPanUpdate: (details) {
-                        viewModel.updateNodePosition(node.name, details.delta / viewModel.scale);
+                        viewModel.updateNodePosition(node.name, viewModel.coords.screenDeltaToLogicalDelta(details.delta));
                       },
                       onPanEnd: (_) {
                         viewModel.snapNodeToGrid(node.name);
@@ -195,7 +210,7 @@ class _DesktopViewState extends State<DesktopView> {
                       child: _DesktopNodeWidget(
                         node: node,
                         scale: viewModel.scale,
-                        gridSize: DesktopViewModel.gridSize,
+                        gridSize: GridConfig.gridCellSize,
                         directoryColor: viewModel.directoryColor,
                         fileColor: viewModel.fileColor,
                         isSelected: isSelected,
@@ -223,27 +238,29 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  void _showBackgroundContextMenu(BuildContext context, Offset position, DesktopViewModel viewModel) {
+  void _showBackgroundContextMenu(BuildContext context, Offset globalPosition, Offset localPosition, DesktopViewModel viewModel) {
     CascadingMenu.show(
       context,
-      position: position,
+      position: globalPosition,
       items: [
         CascadingMenuItem(
           label: 'New Folder',
           icon: Icons.create_new_folder,
           onTap: () {
-            final gridPos = viewModel.pixelPosToGridPos(position - viewModel.offset);
-            final adjustedPos = Offset(gridPos.dx - DesktopViewModel.gridSize, gridPos.dy - DesktopViewModel.gridSize);
-            _promptCreate(context, viewModel, isDirectory: true, gridPosition: adjustedPos);
+            final logicalPos = viewModel.coords.screenToLogical(localPosition);
+            final snappedPos = viewModel.coords.snapToCellCorner(logicalPos);
+            final (gridX, gridY) = viewModel.coords.logicalPosToGridIndices(snappedPos);
+            debugPrint('[CREATE FOLDER] local: (${localPosition.dx.toStringAsFixed(1)}, ${localPosition.dy.toStringAsFixed(1)}) | logical: (${logicalPos.dx.toStringAsFixed(1)}, ${logicalPos.dy.toStringAsFixed(1)}) | snapped: (${snappedPos.dx.toStringAsFixed(1)}, ${snappedPos.dy.toStringAsFixed(1)}) | grid: ($gridX, $gridY)');
+            _promptCreate(context, viewModel, isDirectory: true, gridPosition: snappedPos, originalLogicalPos: logicalPos);
           },
         ),
         CascadingMenuItem(
           label: 'New File',
           icon: Icons.note_add,
           onTap: () {
-            final gridPos = viewModel.pixelPosToGridPos(position - viewModel.offset);
-            final adjustedPos = Offset(gridPos.dx - DesktopViewModel.gridSize, gridPos.dy - DesktopViewModel.gridSize);
-            _promptCreate(context, viewModel, isDirectory: false, gridPosition: adjustedPos);
+            final logicalPos = viewModel.coords.screenToLogical(localPosition);
+            final snappedPos = viewModel.coords.snapToCellCorner(logicalPos);
+            _promptCreate(context, viewModel, isDirectory: false, gridPosition: snappedPos, originalLogicalPos: logicalPos);
           },
         ),
         CascadingMenuItem.divider(),
@@ -410,7 +427,7 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory, Offset? gridPosition}) async {
+  Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory, Offset? gridPosition, Offset? originalLogicalPos}) async {
     final controller = TextEditingController();
     final type = isDirectory ? 'Folder' : 'File';
 
@@ -431,9 +448,9 @@ class _DesktopViewState extends State<DesktopView> {
           onSubmitted: (value) {
             if (value.isNotEmpty) {
               if (isDirectory) {
-                viewModel.createDirectory(value, gridPosition: gridPosition);
+                viewModel.createDirectory(value, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
               } else {
-                viewModel.createFile(value, gridPosition: gridPosition);
+                viewModel.createFile(value, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
               }
               Navigator.pop(context);
             }
@@ -448,9 +465,9 @@ class _DesktopViewState extends State<DesktopView> {
             onPressed: () {
               if (controller.text.isNotEmpty) {
                 if (isDirectory) {
-                  viewModel.createDirectory(controller.text, gridPosition: gridPosition);
+                  viewModel.createDirectory(controller.text, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
                 } else {
-                  viewModel.createFile(controller.text, gridPosition: gridPosition);
+                  viewModel.createFile(controller.text, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
                 }
                 Navigator.pop(context);
               }
@@ -737,13 +754,12 @@ class _DesktopNodeWidget extends StatelessWidget {
 class GridPainter extends CustomPainter {
   final Offset offset;
   final double scale;
-  static const double baseGridSize = 40.0;
 
   GridPainter({required this.offset, required this.scale});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final gridSize = baseGridSize * scale;
+    final gridSize = GridConfig.renderGridSize * scale;
 
     final paint = Paint()
       ..color = const Color(0xFF2A2A2A)

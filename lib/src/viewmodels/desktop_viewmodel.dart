@@ -1,9 +1,9 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import '../services/path_service.dart';
-import '../services/project_root_config_service.dart';
+import '../repositories/desktop_repository.dart';
+import '../repositories/file_system_desktop_repository.dart';
+import '../utils/coordinate_space.dart';
 
 /// Actions that can be performed on selected nodes.
 /// This is the single source of truth for select actions in the desktop view.
@@ -11,18 +11,31 @@ enum DesktopSelectAction {
   delete,
 }
 
+/// Sentinel used by [DesktopNode.copyWith] to distinguish "leave color
+/// unchanged" from "set color to null".
+const _unset = Object();
+
 class DesktopNode {
   final String name;
   final bool isDirectory;
-  Offset position;
-  Color? color;
+  final Offset position;
+  final Color? color;
 
-  DesktopNode({
+  const DesktopNode({
     required this.name,
     required this.isDirectory,
     this.position = Offset.zero,
     this.color,
   });
+
+  DesktopNode copyWith({Offset? position, Object? color = _unset}) {
+    return DesktopNode(
+      name: name,
+      isDirectory: isDirectory,
+      position: position ?? this.position,
+      color: identical(color, _unset) ? this.color : color as Color?,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'x': position.dx,
@@ -32,9 +45,11 @@ class DesktopNode {
 }
 
 class DesktopViewModel extends ChangeNotifier {
+  final DesktopRepository _repository;
   late String _currentDirectory;
   List<DesktopNode> _nodes = [];
   bool _isLoading = false;
+  String? _lastError;
 
   double _scale = 1.0;
   Offset _offset = Offset.zero;
@@ -54,7 +69,8 @@ class DesktopViewModel extends ChangeNotifier {
   final List<String> _history = [];
   final List<String> _forwardHistory = [];
 
-  static const double gridSize = 80.0;
+  // Use GridConfig.gridCellSize instead; kept for backwards compatibility
+  static const double gridSize = GridConfig.gridCellSize;
 
   final Map<String, bool> _availableApps = {};
   Map<String, bool> get availableApps => _availableApps;
@@ -70,12 +86,17 @@ class DesktopViewModel extends ChangeNotifier {
   String get currentDirectory => _currentDirectory;
   List<DesktopNode> get nodes => _nodes;
   bool get isLoading => _isLoading;
+  bool get isInitialized => _initialized;
+  String? get lastError => _lastError;
   double get scale => _scale;
   Offset get offset => _offset;
   Color get directoryColor => _directoryColor;
   Color get fileColor => _fileColor;
   Set<String> get selectedNodeNames => _selectedNodeNames;
   bool isNodeSelected(String nodeName) => _selectedNodeNames.contains(nodeName);
+
+  /// Coordinate space converter (handles all screen ↔ logical conversions).
+  CoordinateSpace get coords => CoordinateSpace(scale: _scale, panOffset: _offset);
 
   set directoryColor(Color value) {
     if (_directoryColor != value) {
@@ -112,9 +133,20 @@ class DesktopViewModel extends ChangeNotifier {
   bool get canGoBack => _history.isNotEmpty;
   bool get canGoForward => _forwardHistory.isNotEmpty;
 
-  DesktopViewModel() {
-    _currentDirectory = PathService.baseDir;
+  DesktopViewModel({DesktopRepository? repository})
+      : _repository = repository ?? FileSystemDesktopRepository() {
+    _currentDirectory = _repository.initialDirectory;
     _init();
+  }
+
+  void _setError(String message) {
+    _lastError = message;
+    notifyListeners();
+  }
+
+  /// Call after displaying [lastError] so it isn't shown again.
+  void clearError() {
+    _lastError = null;
   }
 
   Future<void> _checkAppAvailability() async {
@@ -136,6 +168,7 @@ class DesktopViewModel extends ChangeNotifier {
       await Process.start(cmd, [path], workingDirectory: _currentDirectory);
     } catch (e) {
       debugPrint("Failed to open with $cmd: $e");
+      _setError("Couldn't open $fileName with $cmd");
     }
   }
 
@@ -145,12 +178,19 @@ class DesktopViewModel extends ChangeNotifier {
       await Process.run('xdg-open', [path], workingDirectory: _currentDirectory);
     } catch (e) {
       debugPrint("Failed to open with xdg-open: $e");
+      _setError("Couldn't open $fileName");
     }
   }
 
   Future<void> _init() async {
     await _checkAppAvailability();
-    final config = await ProjectRootConfigService.readLocalConfig();
+    Map<String, dynamic> config = {};
+    try {
+      config = await _repository.readConfig();
+    } catch (e) {
+      debugPrint('Error reading config: $e');
+      _setError("Couldn't read saved settings");
+    }
 
     if (config['directory_color'] != null) {
       _directoryColor = Color(config['directory_color'] as int);
@@ -163,12 +203,12 @@ class DesktopViewModel extends ChangeNotifier {
     _invertHorizontalScroll = config['invert_horizontal_scroll'] as bool? ?? false;
 
     final lastDir = config['last_visited_directory'] as String?;
-    if (lastDir != null && await Directory(lastDir).exists()) {
+    if (lastDir != null && await _repository.directoryExists(lastDir)) {
       _currentDirectory = lastDir;
     } else {
       if (_currentDirectory == p.dirname(Platform.resolvedExecutable)) {
         final home = Platform.isWindows ? Platform.environment['USERPROFILE'] : Platform.environment['HOME'];
-        if (home != null && await Directory(home).exists()) {
+        if (home != null && await _repository.directoryExists(home)) {
           _currentDirectory = home;
         }
       }
@@ -182,13 +222,18 @@ class DesktopViewModel extends ChangeNotifier {
 
   Future<void> _saveGlobalConfig() async {
     if (!_initialized) return;
-    await ProjectRootConfigService.updateLocalConfig((config) {
-      config['directory_color'] = _directoryColor.value;
-      config['file_color'] = _fileColor.value;
-      config['invert_vertical_scroll'] = _invertVerticalScroll;
-      config['invert_horizontal_scroll'] = _invertHorizontalScroll;
-      return config;
-    });
+    try {
+      await _repository.updateConfig((config) {
+        config['directory_color'] = _directoryColor.value;
+        config['file_color'] = _fileColor.value;
+        config['invert_vertical_scroll'] = _invertVerticalScroll;
+        config['invert_horizontal_scroll'] = _invertHorizontalScroll;
+        return config;
+      });
+    } catch (e) {
+      debugPrint('Error saving settings: $e');
+      _setError("Couldn't save settings");
+    }
   }
 
   set scale(double value) {
@@ -209,17 +254,22 @@ class DesktopViewModel extends ChangeNotifier {
 
   Future<void> _saveViewState() async {
     if (!_initialized) return;
-    await ProjectRootConfigService.updateLocalConfig((config) {
-      final viewStates = Map<String, dynamic>.from(config['desktop_view_states'] ?? {});
-      viewStates[_currentDirectory] = {
-        'scale': _scale,
-        'offset_x': _offset.dx,
-        'offset_y': _offset.dy,
-      };
-      config['desktop_view_states'] = viewStates;
-      config['last_visited_directory'] = _currentDirectory;
-      return config;
-    });
+    try {
+      await _repository.updateConfig((config) {
+        final viewStates = Map<String, dynamic>.from(config['desktop_view_states'] ?? {});
+        viewStates[_currentDirectory] = {
+          'scale': _scale,
+          'offset_x': _offset.dx,
+          'offset_y': _offset.dy,
+        };
+        config['desktop_view_states'] = viewStates;
+        config['last_visited_directory'] = _currentDirectory;
+        return config;
+      });
+    } catch (e) {
+      debugPrint('Error saving view state: $e');
+      _setError("Couldn't save view state");
+    }
   }
 
   Future<void> loadDirectory(String path, {bool addToHistory = true, bool clearForward = true, bool force = false}) async {
@@ -234,8 +284,7 @@ class DesktopViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final dir = Directory(path);
-      if (!await dir.exists()) {
+      if (!await _repository.directoryExists(path)) {
         _isLoading = false;
         notifyListeners();
         return;
@@ -248,11 +297,10 @@ class DesktopViewModel extends ChangeNotifier {
         }
       }
 
-      final String oldDirectory = _currentDirectory;
       _currentDirectory = path;
 
-      final config = await ProjectRootConfigService.readLocalConfig();
-      final viewStates = config['desktop_view_states'] as Map<String, dynamic>?;
+      final config = await _repository.readConfig();
+      final viewStates = (config['desktop_view_states'] as Map?)?.cast<String, dynamic>();
       if (viewStates != null && viewStates.containsKey(path)) {
         final state = viewStates[path];
         _scale = state['scale']?.toDouble() ?? 1.0;
@@ -266,22 +314,22 @@ class DesktopViewModel extends ChangeNotifier {
       }
 
       if (_initialized) {
-        config['last_visited_directory'] = _currentDirectory;
-        await ProjectRootConfigService.writeLocalConfig(config);
+        await _repository.updateConfig((c) {
+          c['last_visited_directory'] = _currentDirectory;
+          return c;
+        });
       }
 
-      final entities = await dir.list().toList();
+      final entities = await _repository.listEntities(path);
 
-      final metadataFile = File(p.join(path, 'stitch-grid.json'));
       Map<String, dynamic> layout = {};
-      if (await metadataFile.exists()) {
-        try {
-          final content = await metadataFile.readAsString();
-          final data = json.decode(content);
-          layout = data['layout'] ?? {};
-        } catch (e) {
-          debugPrint('Failed to load metadata: $e');
-        }
+      try {
+        layout = await _repository.readLayout(path);
+        // Ensure metadata file exists on first visit
+        await _repository.updateLayout(path, layout);
+      } catch (e) {
+        debugPrint('Failed to load metadata: $e');
+        _setError("Couldn't load saved layout for this folder");
       }
 
       final usedPositions = <Offset>{};
@@ -289,11 +337,10 @@ class DesktopViewModel extends ChangeNotifier {
       double nextY = 0;
 
       final List<DesktopNode> loadedNodes = [];
-      final List<FileSystemEntity> unpositionedEntities = [];
+      final List<DesktopEntity> unpositionedEntities = [];
 
       for (var e in entities) {
-        final name = p.basename(e.path);
-        if (name == 'stitch-grid.json') continue;
+        final name = e.name;
 
         final nodeLayout = layout[name];
         if (nodeLayout != null) {
@@ -310,7 +357,7 @@ class DesktopViewModel extends ChangeNotifier {
 
           loadedNodes.add(DesktopNode(
             name: name,
-            isDirectory: e is Directory,
+            isDirectory: e.isDirectory,
             position: pos,
             color: nodeColor,
           ));
@@ -320,7 +367,7 @@ class DesktopViewModel extends ChangeNotifier {
       }
 
       for (var e in unpositionedEntities) {
-        final name = p.basename(e.path);
+        final name = e.name;
 
         while (usedPositions.contains(Offset(nextX, nextY))) {
           nextX += gridSize;
@@ -334,12 +381,12 @@ class DesktopViewModel extends ChangeNotifier {
         usedPositions.add(pos);
         loadedNodes.add(DesktopNode(
           name: name,
-          isDirectory: e is Directory,
+          isDirectory: e.isDirectory,
           position: pos,
         ));
       }
 
-      _nodes = loadedNodes;
+      _nodes = List.unmodifiable(loadedNodes);
 
       if (unpositionedEntities.isNotEmpty) {
         _saveMetadata();
@@ -347,65 +394,62 @@ class DesktopViewModel extends ChangeNotifier {
 
     } catch (e) {
       debugPrint('Error loading directory: $e');
+      _setError("Couldn't load this folder");
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  void updateNodePosition(String name, Offset delta) {
+  /// Replace the node named [name] with the result of [update], if present.
+  /// Returns whether a node was found and replaced.
+  bool _replaceNode(String name, DesktopNode Function(DesktopNode) update) {
     final index = _nodes.indexWhere((n) => n.name == name);
-    if (index != -1) {
-      _nodes[index].position += delta;
+    if (index == -1) return false;
+    final updated = List<DesktopNode>.of(_nodes);
+    updated[index] = update(updated[index]);
+    _nodes = List.unmodifiable(updated);
+    return true;
+  }
+
+  void updateNodePosition(String name, Offset delta) {
+    if (_replaceNode(name, (n) => n.copyWith(position: n.position + delta))) {
       notifyListeners();
     }
   }
 
   void snapNodeToGrid(String name) {
-    final index = _nodes.indexWhere((n) => n.name == name);
-    if (index != -1) {
-      final pos = _nodes[index].position;
-      final snappedX = (pos.dx / gridSize).round() * gridSize;
-      final snappedY = (pos.dy / gridSize).round() * gridSize;
-      _nodes[index].position = Offset(snappedX, snappedY);
+    if (_replaceNode(name, (n) => n.copyWith(position: coords.snapToNearestGridCell(n.position)))) {
       notifyListeners();
       _saveMetadata();
     }
   }
 
   Future<void> updateNodeColor(String name, Color? color) async {
-    final index = _nodes.indexWhere((n) => n.name == name);
-    if (index != -1) {
-      _nodes[index].color = color;
+    if (_replaceNode(name, (n) => n.copyWith(color: color))) {
       notifyListeners();
       await _saveMetadata();
     }
   }
 
-  Future<void> createFile(String name, {Offset? gridPosition}) async {
-    final file = File(p.join(_currentDirectory, name));
-    if (!await file.exists()) {
-      await file.create();
+  Future<void> createFile(String name, {Offset? gridPosition, Offset? originalLogicalPos}) async {
+    final created = await _repository.createFile(p.join(_currentDirectory, name));
+    if (created) {
       await loadDirectory(_currentDirectory, addToHistory: false, force: true);
       if (gridPosition != null) {
-        final index = _nodes.indexWhere((n) => n.name == name);
-        if (index != -1) {
-          _nodes[index].position = gridPosition;
+        if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
           await _saveMetadata();
         }
       }
     }
   }
 
-  Future<void> createDirectory(String name, {Offset? gridPosition}) async {
-    final dir = Directory(p.join(_currentDirectory, name));
-    if (!await dir.exists()) {
-      await dir.create();
+  Future<void> createDirectory(String name, {Offset? gridPosition, Offset? originalLogicalPos}) async {
+    final created = await _repository.createDirectory(p.join(_currentDirectory, name));
+    if (created) {
       await loadDirectory(_currentDirectory, addToHistory: false, force: true);
       if (gridPosition != null) {
-        final index = _nodes.indexWhere((n) => n.name == name);
-        if (index != -1) {
-          _nodes[index].position = gridPosition;
+        if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
           await _saveMetadata();
         }
       }
@@ -415,34 +459,22 @@ class DesktopViewModel extends ChangeNotifier {
   Future<void> deleteNode(String name) async {
     final path = p.join(_currentDirectory, name);
     try {
-      if (await File(path).exists()) {
-        await File(path).delete();
-        debugPrint('Deleted file: $path');
-      } else if (await Directory(path).exists()) {
-        await Directory(path).delete(recursive: true);
-        debugPrint('Deleted directory: $path');
-      } else {
-        debugPrint('Path does not exist: $path');
-      }
+      await _repository.delete(path);
+      debugPrint('Deleted: $path');
     } catch (e) {
       debugPrint('Error deleting: $e');
-      rethrow;
+      _setError("Couldn't delete $name");
+      return;
     }
 
-    final metadataFile = File(p.join(_currentDirectory, 'stitch-grid.json'));
-    if (await metadataFile.exists()) {
-      try {
-        final content = await metadataFile.readAsString();
-        final data = json.decode(content);
-        final layout = data['layout'] as Map<String, dynamic>?;
-        if (layout != null && layout.containsKey(name)) {
-          layout.remove(name);
-          await metadataFile.writeAsString(json.encode(data));
-          debugPrint('Removed $name from metadata');
-        }
-      } catch (e) {
-        debugPrint('Failed to update metadata during delete: $e');
-      }
+    try {
+      final layout = await _repository.readLayout(_currentDirectory);
+      layout.remove(name);
+      await _repository.updateLayout(_currentDirectory, layout);
+      debugPrint('Removed $name from metadata');
+    } catch (e) {
+      debugPrint('Failed to update metadata during delete: $e');
+      _setError("Couldn't update layout after deleting $name");
     }
 
     await loadDirectory(_currentDirectory, addToHistory: false, force: true);
@@ -452,25 +484,23 @@ class DesktopViewModel extends ChangeNotifier {
     final oldPath = p.join(_currentDirectory, oldName);
     final newPath = p.join(_currentDirectory, newName);
 
-    if (await File(oldPath).exists()) {
-      await File(oldPath).rename(newPath);
-    } else if (await Directory(oldPath).exists()) {
-      await Directory(oldPath).rename(newPath);
+    try {
+      await _repository.rename(oldPath, newPath);
+    } catch (e) {
+      debugPrint('Error renaming: $e');
+      _setError("Couldn't rename $oldName");
+      return;
     }
 
-    final metadataFile = File(p.join(_currentDirectory, 'stitch-grid.json'));
-    if (await metadataFile.exists()) {
-      try {
-        final content = await metadataFile.readAsString();
-        final data = json.decode(content);
-        final layout = data['layout'] as Map<String, dynamic>;
-        if (layout.containsKey(oldName)) {
-          layout[newName] = layout.remove(oldName);
-          await metadataFile.writeAsString(json.encode(data));
-        }
-      } catch (e) {
-        debugPrint('Failed to update metadata during rename: $e');
+    try {
+      final layout = await _repository.readLayout(_currentDirectory);
+      if (layout.containsKey(oldName)) {
+        layout[newName] = layout.remove(oldName);
+        await _repository.updateLayout(_currentDirectory, layout);
       }
+    } catch (e) {
+      debugPrint('Failed to update metadata during rename: $e');
+      _setError("Couldn't update layout after renaming $oldName");
     }
 
     await loadDirectory(_currentDirectory, addToHistory: false, force: true);
@@ -509,22 +539,12 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   Future<void> _saveMetadata() async {
-    final metadataFile = File(p.join(_currentDirectory, 'stitch-grid.json'));
     final layout = {
       for (var node in _nodes) node.name: node.toJson()
     };
-    final data = {
-      'version': '1.0',
-      'layout': layout,
-    };
-    await metadataFile.writeAsString(json.encode(data));
+    await _repository.updateLayout(_currentDirectory, layout);
   }
 
-  Offset pixelPosToGridPos(Offset pixelPos) {
-    final gridX = (pixelPos.dx / gridSize).round() * gridSize;
-    final gridY = (pixelPos.dy / gridSize).round() * gridSize;
-    return Offset(gridX, gridY);
-  }
 
   void navigateUp() {
     final parent = p.dirname(_currentDirectory);
