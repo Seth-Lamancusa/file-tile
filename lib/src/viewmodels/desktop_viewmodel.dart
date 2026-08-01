@@ -586,6 +586,15 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
+  /// Clear drag state without moving anything. Call this when a pan gesture
+  /// is claimed by a competing recognizer (e.g. it resolves to a plain tap
+  /// instead of a drag), so stale start-positions don't linger.
+  void cancelDrag() {
+    if (_dragStartPositions.isEmpty) return;
+    _dragStartPositions.clear();
+    notifyListeners();
+  }
+
   /// Attempt to move nodes to a directory or snap to grid with collision detection.
   /// First checks if cursor is over a directory widget or breadcrumb to trigger a move.
   /// If no drop target is found, snaps to grid and reverts on collision.

@@ -182,15 +182,20 @@ class _DesktopViewState extends State<DesktopView> {
                 );
               }).toList();
 
-              // Handle left-click for selection
+              // Handle left-click on empty canvas (deselect all).
+              // Clicks that hit a node are handled by that node's own GestureDetector
+              // (onTap/onPanDown), so its tap-vs-drag arena can decide what to do.
               if (event.buttons & kPrimaryButton != 0) {
-                _clickHandler.handlePrimaryPointerDown(
-                  screenPosition: canvasPosition,
-                  nodes: nodes,
-                  coords: viewModel.coords,
-                );
+                final hitNode = nodes.any((n) => n.hitsPoint(canvasPosition, viewModel.coords));
+                if (!hitNode) {
+                  _clickHandler.handlePrimaryPointerDown(
+                    screenPosition: canvasPosition,
+                    nodes: nodes,
+                    coords: viewModel.coords,
+                  );
+                }
               }
-              // Handle right-click for context menu
+              // Handle right-click for context menu (apply immediately)
               else if (event.buttons & kSecondaryButton != 0) {
                 final result = _clickHandler.handleSecondaryPointerDown(
                   screenPosition: canvasPosition,
@@ -265,12 +270,32 @@ class _DesktopViewState extends State<DesktopView> {
                     left: screenPos.dx,
                     top: screenPos.dy,
                     child: GestureDetector(
+                      // Flutter's gesture arena natively disambiguates tap vs. drag on this
+                      // same GestureDetector: onTap fires only if the pointer never moves
+                      // beyond the touch slop; onPanUpdate/onPanEnd fire once real movement
+                      // is detected. No manual timers needed.
+                      onTap: () {
+                        final hitTestNodes = viewModel.nodes.map((n) {
+                          return HitTestNode(
+                            id: n.name,
+                            position: n.position,
+                            size: GridConfig.gridCellSize,
+                          );
+                        }).toList();
+                        _clickHandler.handleNodeTap(nodeId: node.name, nodes: hitTestNodes);
+                      },
                       onPanDown: (_) {
                         // Determine which nodes are being dragged
                         final nodesToDrag = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
                           ? viewModel.selectedNodeNames
                           : {node.name};
                         viewModel.startDrag(nodesToDrag);
+                        _currentDragCursorPos = null;
+                      },
+                      onPanCancel: () {
+                        // Pan lost the gesture arena to the tap recognizer (or was otherwise
+                        // interrupted) - clear the drag state we speculatively captured.
+                        viewModel.cancelDrag();
                         _currentDragCursorPos = null;
                       },
                       onPanUpdate: (details) {

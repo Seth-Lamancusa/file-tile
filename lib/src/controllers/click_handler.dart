@@ -65,7 +65,6 @@ class ClickHandler {
     // A node was clicked; dispatch based on action.
     switch (action) {
       case ClickAction.selectSingle:
-        // Always select single, even if already selected (deselect other items in multi-selection)
         selectionController.selectSingle(clickedNodeId);
         break;
       case ClickAction.toggleSelect:
@@ -83,6 +82,31 @@ class ClickHandler {
       action: action,
       logicalPosition: logicalPos,
     );
+  }
+
+  /// Process a tap on a known node (no hit-testing needed — the caller already
+  /// knows which node was tapped, e.g. via its own GestureDetector).
+  /// Applies the same modifier-aware selection logic as [handlePrimaryPointerDown].
+  void handleNodeTap({
+    required String nodeId,
+    required List<HitTestNode> nodes,
+  }) {
+    final modifiers = ClickModifiers.fromHardwareKeyboard();
+    final action = ClickActionMapper.mapModifiersToAction(modifiers);
+
+    switch (action) {
+      case ClickAction.selectSingle:
+        selectionController.selectSingle(nodeId);
+        break;
+      case ClickAction.toggleSelect:
+        selectionController.toggleSelect(nodeId);
+        break;
+      case ClickAction.rangeSelect:
+        _handleRangeSelect(nodeId, nodes);
+        break;
+      case ClickAction.noOp:
+        break;
+    }
   }
 
   /// Process a secondary (right) click event for context menus.
