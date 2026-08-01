@@ -648,23 +648,36 @@ class DesktopViewModel extends ChangeNotifier {
   /// Uses the same column-wrapping auto-placement logic.
   /// Does not navigate to the target directory.
   Future<void> moveNodesToDirectory(Set<String> nodeNames, String targetPath) async {
-    if (nodeNames.isEmpty || targetPath == _currentDirectory) return;
+    // Filter out the metadata file (can't move stitch-grid.json)
+    final filteredNodeNames = nodeNames.where((n) => n != 'stitch-grid.json').toSet();
+
+    if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
 
     try {
       // Move each node in the filesystem
-      for (final nodeName in nodeNames) {
+      for (final nodeName in filteredNodeNames) {
         final sourcePath = p.join(_currentDirectory, nodeName);
         final destPath = p.join(targetPath, nodeName);
         await _repository.rename(sourcePath, destPath);
       }
 
+      // Read source layout to preserve attributes during move
+      final sourceLayout = await _repository.readLayout(_currentDirectory);
+
+      // Preserve node attributes before removing from source layout
+      final movedNodeData = <String, Map<String, dynamic>>{};
+      for (final nodeName in filteredNodeNames) {
+        if (sourceLayout.containsKey(nodeName)) {
+          movedNodeData[nodeName] = Map<String, dynamic>.from(sourceLayout[nodeName] as Map);
+        }
+      }
+
       // Update layout for source directory (remove moved nodes)
       try {
-        final layout = await _repository.readLayout(_currentDirectory);
-        for (final nodeName in nodeNames) {
-          layout.remove(nodeName);
+        for (final nodeName in filteredNodeNames) {
+          sourceLayout.remove(nodeName);
         }
-        await _repository.updateLayout(_currentDirectory, layout);
+        await _repository.updateLayout(_currentDirectory, sourceLayout);
       } catch (e) {
         debugPrint('Failed to update source directory layout: $e');
       }
@@ -684,15 +697,26 @@ class DesktopViewModel extends ChangeNotifier {
         // Find positions for moved nodes
         double nextX = 0;
         double nextY = 0;
-        for (final nodeName in nodeNames) {
+        debugPrint('[moveNodesToDirectory] Placing ${filteredNodeNames.length} node(s) in $targetPath (grid size: $gridSize, wrap at: 5 columns)');
+        for (final nodeName in filteredNodeNames) {
+          final searchStart = Offset(nextX, nextY);
           final pos = findNextAvailablePosition(
-            Offset(nextX, nextY),
+            searchStart,
             usedPositions,
             gridSize,
             5, // maxColumnsBeforeWrap
           );
           usedPositions.add(pos);
-          targetLayout[nodeName] = {'x': pos.dx, 'y': pos.dy};
+
+          final col = (pos.dx / gridSize).round();
+          final row = (pos.dy / gridSize).round();
+          debugPrint('[moveNodesToDirectory] "$nodeName": searched from (${(searchStart.dx / gridSize).round()}, ${(searchStart.dy / gridSize).round()}) → placed at col=$col row=$row (x=${pos.dx}, y=${pos.dy})');
+
+          // Preserve all attributes from source except position
+          final newEntry = Map<String, dynamic>.from(movedNodeData[nodeName] ?? {});
+          newEntry['x'] = pos.dx;
+          newEntry['y'] = pos.dy;
+          targetLayout[nodeName] = newEntry;
 
           // Update nextX and nextY for the next search
           nextX = pos.dx + gridSize;
