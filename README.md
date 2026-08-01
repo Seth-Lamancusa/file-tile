@@ -1,5 +1,7 @@
 # Stitch Desktop Grid
 
+⊞
+
 A free-form desktop grid. Organize files, folders, or other items on an infinite canvas with drag-and-drop, zoom, and pan controls.
 
 ## Features
@@ -87,6 +89,11 @@ final List<Map<String, String>> _appRegistry = [
   // ... more apps
 ];
 ```
+
+## Build Instructions
+
+`dart pub global activate flutter_distributor` if not yet run.
+`flutter_distributor release --name production`
 
 ## Future Enhancements
 

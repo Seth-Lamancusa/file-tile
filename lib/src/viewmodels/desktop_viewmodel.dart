@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import '../controllers/selection_controller.dart';
 import '../repositories/desktop_repository.dart';
 import '../repositories/file_system_desktop_repository.dart';
 import '../utils/coordinate_space.dart';
@@ -46,6 +47,7 @@ class DesktopNode {
 
 class DesktopViewModel extends ChangeNotifier {
   final DesktopRepository _repository;
+  final SelectionController _selectionController = SelectionController();
   late String _currentDirectory;
   List<DesktopNode> _nodes = [];
   bool _isLoading = false;
@@ -54,8 +56,6 @@ class DesktopViewModel extends ChangeNotifier {
   double _scale = 1.0;
   Offset _offset = Offset.zero;
   bool _initialized = false;
-
-  final Set<String> _selectedNodeNames = {};
 
   Color _directoryColor = const Color(0xFFEBC351);
   Color _fileColor = const Color(0xFF64B5F6);
@@ -92,8 +92,9 @@ class DesktopViewModel extends ChangeNotifier {
   Offset get offset => _offset;
   Color get directoryColor => _directoryColor;
   Color get fileColor => _fileColor;
-  Set<String> get selectedNodeNames => _selectedNodeNames;
-  bool isNodeSelected(String nodeName) => _selectedNodeNames.contains(nodeName);
+  Set<String> get selectedNodeNames => _selectionController.selected;
+  bool isNodeSelected(String nodeName) => _selectionController.isSelected(nodeName);
+  SelectionController get selectionController => _selectionController;
 
   /// Coordinate space converter (handles all screen ↔ logical conversions).
   CoordinateSpace get coords => CoordinateSpace(scale: _scale, panOffset: _offset);
@@ -279,7 +280,7 @@ class DesktopViewModel extends ChangeNotifier {
       await _saveViewState();
     }
 
-    _selectedNodeNames.clear();
+    _selectionController.clearSelection();
     _isLoading = true;
     notifyListeners();
 
@@ -557,39 +558,23 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   void selectNode(String nodeName, {bool multiSelect = false}) {
-    final beforeCount = _selectedNodeNames.length;
-
     if (multiSelect) {
-      if (_selectedNodeNames.contains(nodeName)) {
-        _selectedNodeNames.remove(nodeName);
-      } else {
-        _selectedNodeNames.add(nodeName);
-      }
+      _selectionController.toggleSelect(nodeName);
     } else {
-      if (_selectedNodeNames.length == 1 && _selectedNodeNames.contains(nodeName)) {
-        _selectedNodeNames.clear();
-      } else {
-        _selectedNodeNames.clear();
-        _selectedNodeNames.add(nodeName);
-      }
+      _selectionController.selectSingle(nodeName);
     }
-
-    if (beforeCount != _selectedNodeNames.length) {
-      notifyListeners();
-    }
+    notifyListeners();
   }
 
   void deselectNode() {
-    if (_selectedNodeNames.isNotEmpty) {
-      _selectedNodeNames.clear();
-      notifyListeners();
-    }
+    _selectionController.clearSelection();
+    notifyListeners();
   }
 
   /// Performs a select action on all selected nodes.
   /// Currently supported: [DesktopSelectAction.delete]
   Future<void> performSelectAction(DesktopSelectAction action) async {
-    if (_selectedNodeNames.isEmpty) return;
+    if (_selectionController.selected.isEmpty) return;
 
     switch (action) {
       case DesktopSelectAction.delete:
@@ -598,7 +583,7 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   Future<void> _performDelete() async {
-    final nodesToDelete = _selectedNodeNames.toList();
+    final nodesToDelete = _selectionController.selected.toList();
     for (final nodeName in nodesToDelete) {
       await deleteNode(nodeName);
     }

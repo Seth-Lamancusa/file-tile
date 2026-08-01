@@ -1,0 +1,8 @@
+app_id: stitch.grid
+display_name: Stitch Grid
+package_name: stitch-grid
+summary: Desktop GUI
+icon: assets/grid.png
+categories:
+  - Development
+  - Utility

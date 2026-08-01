@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:path/path.dart' as p;
+import '../controllers/click_handler.dart';
 import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
@@ -19,6 +20,7 @@ class DesktopView extends StatefulWidget {
 
 class _DesktopViewState extends State<DesktopView> {
   late FocusNode _focusNode;
+  late ClickHandler _clickHandler;
 
   @override
   void initState() {
@@ -27,6 +29,9 @@ class _DesktopViewState extends State<DesktopView> {
     HardwareKeyboard.instance.addHandler(_handleRawKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
+      // Initialize the click handler with the selection controller from the ViewModel
+      final viewModel = context.read<DesktopViewModel>();
+      _clickHandler = ClickHandler(selectionController: viewModel.selectionController);
     });
   }
 
@@ -121,6 +126,25 @@ class _DesktopViewState extends State<DesktopView> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             return Listener(
+            onPointerDown: (event) {
+              // Handle left-click for selection
+              if (event.buttons & kPrimaryButton != 0) {
+                final nodes = viewModel.nodes.map((node) {
+                  return HitTestNode(
+                    id: node.name,
+                    position: node.position,
+                    size: GridConfig.gridCellSize,
+                  );
+                }).toList();
+
+                _clickHandler.handlePointerDown(
+                  screenPosition: event.position,
+                  nodes: nodes,
+                  coords: viewModel.coords,
+                );
+                viewModel.notifyListeners();
+              }
+            },
             onPointerSignal: (pointerSignal) {
               if (pointerSignal is PointerScrollEvent) {
                 final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
@@ -156,13 +180,6 @@ class _DesktopViewState extends State<DesktopView> {
                 Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTapDown: (details) {
-                      final pixelPos = details.localPosition;
-                      final logicalPos = viewModel.coords.screenToLogical(pixelPos);
-                      final (gridX, gridY) = viewModel.coords.logicalPosToGridIndices(logicalPos);
-                      debugPrint('[LEFT CLICK] local: (${pixelPos.dx.toStringAsFixed(1)}, ${pixelPos.dy.toStringAsFixed(1)}) → logical: (${logicalPos.dx.toStringAsFixed(1)}, ${logicalPos.dy.toStringAsFixed(1)}) → grid: ($gridX, $gridY)');
-                      viewModel.deselectNode();
-                    },
                     onPanUpdate: (details) {
                       viewModel.offset = viewModel.offset + details.delta;
                     },
@@ -193,14 +210,10 @@ class _DesktopViewState extends State<DesktopView> {
                       onPanEnd: (_) {
                         viewModel.snapNodeToGrid(node.name);
                       },
-                      onTap: () {
-                        final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
-                        final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-                        viewModel.selectNode(node.name, multiSelect: isCtrlPressed || isShiftPressed);
-                      },
                       onSecondaryTapDown: (details) {
                         if (!isSelected) {
-                          viewModel.selectNode(node.name);
+                          viewModel.selectionController.selectSingle(node.name);
+                          viewModel.notifyListeners();
                         }
                         _showNodeContextMenu(context, details.globalPosition, viewModel);
                       },

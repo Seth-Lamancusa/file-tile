@@ -77,5 +77,5 @@ coverage/
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
 
 # Config files
-.stitch_desktop_config.json
-.stitch_desktop.json
+stitch-grid-config.json
+**/stitch-grid.json
