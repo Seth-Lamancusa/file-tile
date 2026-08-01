@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import '../models/new_element_placement_config.dart';
 import '../services/path_service.dart';
 import '../utils/config_manager.dart';
 import '../utils/metadata_helper.dart';
@@ -106,5 +107,19 @@ class FileSystemDesktopRepository implements DesktopRepository {
     final manager = MetadataManager(path);
     await manager.load();
     await manager.updateLayout(layout);
+  }
+
+  @override
+  Future<NewElementPlacementConfig> readNewElementPlacementConfig(String path) async {
+    final manager = MetadataManager(path);
+    await manager.load();
+    return manager.newElementPlacementConfig;
+  }
+
+  @override
+  Future<void> updateNewElementPlacementConfig(String path, NewElementPlacementConfig config) async {
+    final manager = MetadataManager(path);
+    await manager.load();
+    await manager.updateNewElementPlacementConfig(config);
   }
 }

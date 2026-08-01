@@ -1,7 +1,6 @@
 class NewElementPlacementConfig {
   final int anchorCol;
   final int anchorRow;
-  final ConstrainedAxis constrainedAxis;
   final int constrainedCount;
   final String constrainedDirection;
   final String unconstrainedDirection;
@@ -9,7 +8,6 @@ class NewElementPlacementConfig {
   NewElementPlacementConfig({
     required this.anchorCol,
     required this.anchorRow,
-    required this.constrainedAxis,
     required this.constrainedCount,
     required this.constrainedDirection,
     required this.unconstrainedDirection,
@@ -17,29 +15,44 @@ class NewElementPlacementConfig {
     _validate();
   }
 
+  bool get isConstrainedAxisColumns => ['left', 'right'].contains(constrainedDirection);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NewElementPlacementConfig &&
+          runtimeType == other.runtimeType &&
+          anchorCol == other.anchorCol &&
+          anchorRow == other.anchorRow &&
+          constrainedCount == other.constrainedCount &&
+          constrainedDirection == other.constrainedDirection &&
+          unconstrainedDirection == other.unconstrainedDirection;
+
+  @override
+  int get hashCode => Object.hash(anchorCol, anchorRow, constrainedCount, constrainedDirection, unconstrainedDirection);
+
   void _validate() {
-    if (constrainedAxis == ConstrainedAxis.columns) {
-      if (!['left', 'right'].contains(constrainedDirection)) {
-        throw ArgumentError(
-          'constrainedDirection must be "left" or "right" when constrainedAxis is columns',
-        );
-      }
-      if (!['up', 'down'].contains(unconstrainedDirection)) {
-        throw ArgumentError(
-          'unconstrainedDirection must be "up" or "down" when constrainedAxis is columns',
-        );
-      }
-    } else {
-      if (!['up', 'down'].contains(constrainedDirection)) {
-        throw ArgumentError(
-          'constrainedDirection must be "up" or "down" when constrainedAxis is rows',
-        );
-      }
-      if (!['left', 'right'].contains(unconstrainedDirection)) {
-        throw ArgumentError(
-          'unconstrainedDirection must be "left" or "right" when constrainedAxis is rows',
-        );
-      }
+    final validConstrainedDirs = ['left', 'right', 'up', 'down'];
+    final validUnconstrainedDirs = ['left', 'right', 'up', 'down'];
+
+    if (!validConstrainedDirs.contains(constrainedDirection)) {
+      throw ArgumentError(
+        'constrainedDirection must be one of: left, right, up, down',
+      );
+    }
+    if (!validUnconstrainedDirs.contains(unconstrainedDirection)) {
+      throw ArgumentError(
+        'unconstrainedDirection must be one of: left, right, up, down',
+      );
+    }
+
+    final constrainedIsHorizontal = ['left', 'right'].contains(constrainedDirection);
+    final unconstrainedIsHorizontal = ['left', 'right'].contains(unconstrainedDirection);
+
+    if (constrainedIsHorizontal == unconstrainedIsHorizontal) {
+      throw ArgumentError(
+        'constrainedDirection and unconstrainedDirection must be on perpendicular axes',
+      );
     }
   }
 
@@ -47,9 +60,6 @@ class NewElementPlacementConfig {
     return NewElementPlacementConfig(
       anchorCol: json['anchor']['col'] as int? ?? 0,
       anchorRow: json['anchor']['row'] as int? ?? 0,
-      constrainedAxis: json['constrainedAxis'] == 'rows'
-          ? ConstrainedAxis.rows
-          : ConstrainedAxis.columns,
       constrainedCount: json['constrainedCount'] as int? ?? 5,
       constrainedDirection: json['constrainedDirection'] as String? ?? 'right',
       unconstrainedDirection: json['unconstrainedDirection'] as String? ?? 'down',
@@ -61,7 +71,6 @@ class NewElementPlacementConfig {
           'col': anchorCol,
           'row': anchorRow,
         },
-        'constrainedAxis': constrainedAxis == ConstrainedAxis.rows ? 'rows' : 'columns',
         'constrainedCount': constrainedCount,
         'constrainedDirection': constrainedDirection,
         'unconstrainedDirection': unconstrainedDirection,
@@ -69,17 +78,11 @@ class NewElementPlacementConfig {
 
   factory NewElementPlacementConfig.defaultConfig() {
     return NewElementPlacementConfig(
-      anchorCol: 0,
-      anchorRow: 0,
-      constrainedAxis: ConstrainedAxis.columns,
+      anchorCol: 2,
+      anchorRow: -2,
       constrainedCount: 5,
       constrainedDirection: 'right',
-      unconstrainedDirection: 'down',
+      unconstrainedDirection: 'up',
     );
   }
-}
-
-enum ConstrainedAxis {
-  columns,
-  rows,
 }

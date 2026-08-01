@@ -1,3 +1,5 @@
+import '../models/new_element_placement_config.dart';
+
 /// A directory entry as seen by [DesktopRepository].
 class DesktopEntity {
   final String name;
@@ -52,4 +54,11 @@ abstract class DesktopRepository {
 
   /// Overwrite the saved node layout for the directory at [path].
   Future<void> updateLayout(String path, Map<String, dynamic> layout);
+
+  /// Read the new element placement configuration for the directory at [path].
+  /// Returns the default configuration if none exists yet.
+  Future<NewElementPlacementConfig> readNewElementPlacementConfig(String path);
+
+  /// Update the new element placement configuration for the directory at [path].
+  Future<void> updateNewElementPlacementConfig(String path, NewElementPlacementConfig config);
 }

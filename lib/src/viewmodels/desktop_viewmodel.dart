@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import '../controllers/selection_controller.dart';
+import '../models/new_element_placement_config.dart';
 import '../repositories/desktop_repository.dart';
 import '../repositories/file_system_desktop_repository.dart';
 import '../utils/coordinate_space.dart';
@@ -53,6 +54,7 @@ class DesktopViewModel extends ChangeNotifier {
   List<DesktopNode> _nodes = [];
   bool _isLoading = false;
   String? _lastError;
+  NewElementPlacementConfig _newElementPlacementConfig = NewElementPlacementConfig.defaultConfig();
 
   double _scale = 1.0;
   Offset _offset = Offset.zero;
@@ -89,6 +91,7 @@ class DesktopViewModel extends ChangeNotifier {
 
   String get currentDirectory => _currentDirectory;
   List<DesktopNode> get nodes => _nodes;
+  NewElementPlacementConfig get newElementPlacementConfig => _newElementPlacementConfig;
 
   /// Nodes in render order, with any currently-dragged nodes moved to the
   /// end so they render on top of everything else in the Stack.
@@ -332,6 +335,8 @@ class DesktopViewModel extends ChangeNotifier {
         // Ensure metadata file exists on first visit, before listing entities,
         // so it appears in the initial render instead of only after renavigating.
         await _repository.updateLayout(path, layout);
+
+        _newElementPlacementConfig = await _repository.readNewElementPlacementConfig(path);
       } catch (e) {
         debugPrint('Failed to load metadata: $e');
         _setError("Couldn't load saved layout for this folder");
@@ -376,11 +381,10 @@ class DesktopViewModel extends ChangeNotifier {
       for (var e in unpositionedEntities) {
         final name = e.name;
 
-        final pos = findNextAvailablePosition(
-          Offset(nextX, nextY),
+        final pos = _findNextPositionUsingConfig(
+          _newElementPlacementConfig,
           usedPositions,
           gridSize,
-          5, // maxColumnsBeforeWrap
         );
         usedPositions.add(pos);
         loadedNodes.add(DesktopNode(
@@ -388,13 +392,6 @@ class DesktopViewModel extends ChangeNotifier {
           isDirectory: e.isDirectory,
           position: pos,
         ));
-
-        // Update nextX and nextY for the next search
-        nextX = pos.dx + gridSize;
-        if ((nextX / gridSize).round() >= 5) {
-          nextX = 0;
-          nextY = pos.dy + gridSize;
-        }
       }
 
       _nodes = List.unmodifiable(loadedNodes);
@@ -794,6 +791,59 @@ class DesktopViewModel extends ChangeNotifier {
       final next = _forwardHistory.removeLast();
       _history.add(_currentDirectory);
       loadDirectory(next, addToHistory: false);
+    }
+  }
+
+  Offset _findNextPositionUsingConfig(
+    NewElementPlacementConfig config,
+    Set<Offset> usedPositions,
+    double gridSize,
+  ) {
+    final isConstrainedHorizontal = config.isConstrainedAxisColumns;
+
+    // Search for the next available position starting from anchor
+    int constrainedIndex = 0;
+    int unconstrainedIndex = 0;
+
+    while (true) {
+      // Calculate grid position based on constrained/unconstrained directions
+      int gridCol;
+      int gridRow;
+
+      if (isConstrainedHorizontal) {
+        // Constrained direction is horizontal (left/right)
+        gridCol = config.constrainedDirection == 'right'
+            ? config.anchorCol + constrainedIndex
+            : config.anchorCol - constrainedIndex;
+        gridRow = config.unconstrainedDirection == 'down'
+            ? config.anchorRow + unconstrainedIndex
+            : config.anchorRow - unconstrainedIndex;
+      } else {
+        // Constrained direction is vertical (up/down)
+        gridRow = config.constrainedDirection == 'down'
+            ? config.anchorRow + constrainedIndex
+            : config.anchorRow - constrainedIndex;
+        gridCol = config.unconstrainedDirection == 'right'
+            ? config.anchorCol + unconstrainedIndex
+            : config.anchorCol - unconstrainedIndex;
+      }
+
+      // Convert grid indices to logical pixels (1-based for positive)
+      final logicalX = gridCol > 0 ? (gridCol - 1) * gridSize : gridCol * gridSize;
+      final logicalY = gridRow > 0 ? (gridRow - 1) * gridSize : gridRow * gridSize;
+      final pos = Offset(logicalX, logicalY);
+
+      // Check if this position is available
+      if (!usedPositions.contains(pos)) {
+        return pos;
+      }
+
+      // Move to next position: increment constrained first, then unconstrained
+      constrainedIndex++;
+      if (constrainedIndex >= config.constrainedCount) {
+        constrainedIndex = 0;
+        unconstrainedIndex++;
+      }
     }
   }
 }

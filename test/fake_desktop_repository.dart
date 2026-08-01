@@ -1,4 +1,5 @@
 import 'package:path/path.dart' as p;
+import 'package:stitch_desktop_grid/src/models/new_element_placement_config.dart';
 import 'package:stitch_desktop_grid/src/repositories/desktop_repository.dart';
 
 /// In-memory [DesktopRepository] for tests. No real file I/O.
@@ -111,5 +112,15 @@ class FakeDesktopRepository implements DesktopRepository {
   @override
   Future<void> updateLayout(String path, Map<String, dynamic> layout) async {
     _layouts[path] = Map<String, dynamic>.from(layout);
+  }
+
+  @override
+  Future<NewElementPlacementConfig> readNewElementPlacementConfig(String path) async {
+    return NewElementPlacementConfig.defaultConfig();
+  }
+
+  @override
+  Future<void> updateNewElementPlacementConfig(String path, NewElementPlacementConfig config) async {
+    // No-op for fake repository
   }
 }

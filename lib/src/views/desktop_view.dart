@@ -8,6 +8,7 @@ import '../models/click_event.dart';
 import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
+import '../widgets/placement_region_painter.dart';
 import '../utils/coordinate_space.dart';
 
 export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction;
@@ -257,6 +258,17 @@ class _DesktopViewState extends State<DesktopView> {
                           offset: viewModel.offset,
                           scale: viewModel.scale,
                         ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      size: Size.infinite,
+                      painter: PlacementRegionPainter(
+                        config: viewModel.newElementPlacementConfig,
+                        coords: viewModel.coords,
                       ),
                     ),
                   ),
