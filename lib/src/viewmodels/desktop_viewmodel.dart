@@ -319,20 +319,6 @@ class DesktopViewModel extends ChangeNotifier {
 
       _currentDirectory = path;
 
-      final config = await _repository.readConfig();
-      final viewStates = (config['desktop_view_states'] as Map?)?.cast<String, dynamic>();
-      if (viewStates != null && viewStates.containsKey(path)) {
-        final state = viewStates[path];
-        _scale = state['scale']?.toDouble() ?? 1.0;
-        _offset = Offset(
-          state['offset_x']?.toDouble() ?? 0.0,
-          state['offset_y']?.toDouble() ?? 0.0,
-        );
-      } else {
-        _scale = 1.0;
-        _offset = Offset.zero;
-      }
-
       if (_initialized) {
         await _repository.updateConfig((c) {
           c['last_visited_directory'] = _currentDirectory;
@@ -417,6 +403,20 @@ class DesktopViewModel extends ChangeNotifier {
 
       if (unpositionedEntities.isNotEmpty) {
         _saveMetadata();
+      }
+
+      final config = await _repository.readConfig();
+      final viewStates = (config['desktop_view_states'] as Map?)?.cast<String, dynamic>();
+      if (viewStates != null && viewStates.containsKey(path)) {
+        final state = viewStates[path];
+        _scale = state['scale']?.toDouble() ?? 1.0;
+        _offset = Offset(
+          state['offset_x']?.toDouble() ?? 0.0,
+          state['offset_y']?.toDouble() ?? 0.0,
+        );
+      } else {
+        _scale = 1.0;
+        _offset = Offset.zero;
       }
 
     } catch (e) {
@@ -697,20 +697,14 @@ class DesktopViewModel extends ChangeNotifier {
         // Find positions for moved nodes
         double nextX = 0;
         double nextY = 0;
-        debugPrint('[moveNodesToDirectory] Placing ${filteredNodeNames.length} node(s) in $targetPath (grid size: $gridSize, wrap at: 5 columns)');
         for (final nodeName in filteredNodeNames) {
-          final searchStart = Offset(nextX, nextY);
           final pos = findNextAvailablePosition(
-            searchStart,
+            Offset(nextX, nextY),
             usedPositions,
             gridSize,
             5, // maxColumnsBeforeWrap
           );
           usedPositions.add(pos);
-
-          final col = (pos.dx / gridSize).round();
-          final row = (pos.dy / gridSize).round();
-          debugPrint('[moveNodesToDirectory] "$nodeName": searched from (${(searchStart.dx / gridSize).round()}, ${(searchStart.dy / gridSize).round()}) → placed at col=$col row=$row (x=${pos.dx}, y=${pos.dy})');
 
           // Preserve all attributes from source except position
           final newEntry = Map<String, dynamic>.from(movedNodeData[nodeName] ?? {});
