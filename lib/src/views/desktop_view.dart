@@ -893,6 +893,30 @@ class _DesktopViewState extends State<DesktopView> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Selection Controls
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Selection Controls', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                ),
+                const SizedBox(height: 12),
+                _buildControlRow('Left Click', 'Select single node'),
+                _buildControlRow('Ctrl + Click', 'Toggle select node'),
+                _buildControlRow('Shift + Click', 'Range select (rectangular area)'),
+                _buildControlRow('Right Click', 'Open context menu'),
+                _buildControlRow('Delete', 'Delete selected nodes'),
+                _buildControlRow('Double-Click Folder', 'Open folder'),
+                const SizedBox(height: 16),
+                // Scroll & Pan Controls
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Scroll & Pan Controls', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                ),
+                const SizedBox(height: 12),
+                _buildControlRow('Scroll', 'Vertical pan'),
+                _buildControlRow('Shift + Scroll', 'Horizontal pan'),
+                _buildControlRow('Ctrl + Scroll', 'Zoom in/out'),
+                const SizedBox(height: 16),
+                // Scroll Settings
                 const Align(
                   alignment: Alignment.centerLeft,
                   child: Text('Scroll Settings', style: TextStyle(color: Colors.white70, fontSize: 12)),
@@ -926,6 +950,25 @@ class _DesktopViewState extends State<DesktopView> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildControlRow(String control, String description) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            control,
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+          Text(
+            description,
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+        ],
       ),
     );
   }
