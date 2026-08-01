@@ -320,17 +320,18 @@ class DesktopViewModel extends ChangeNotifier {
         });
       }
 
-      final entities = await _repository.listEntities(path);
-
       Map<String, dynamic> layout = {};
       try {
         layout = await _repository.readLayout(path);
-        // Ensure metadata file exists on first visit
+        // Ensure metadata file exists on first visit, before listing entities,
+        // so it appears in the initial render instead of only after renavigating.
         await _repository.updateLayout(path, layout);
       } catch (e) {
         debugPrint('Failed to load metadata: $e');
         _setError("Couldn't load saved layout for this folder");
       }
+
+      final entities = await _repository.listEntities(path);
 
       final usedPositions = <Offset>{};
       double nextX = 0;
@@ -387,6 +388,8 @@ class DesktopViewModel extends ChangeNotifier {
       }
 
       _nodes = List.unmodifiable(loadedNodes);
+      debugPrint('[DesktopViewModel] rendering ${_nodes.length} node(s) for $path: '
+          '${_nodes.map((n) => n.name).toList()}');
 
       if (unpositionedEntities.isNotEmpty) {
         _saveMetadata();

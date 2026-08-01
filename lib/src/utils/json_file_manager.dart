@@ -84,7 +84,11 @@ abstract class JsonFileManager {
     try {
       validateAndLoad(json.encode(data));
       await file.parent.create(recursive: true);
+      final existedBefore = await file.exists();
       await file.writeAsString(json.encode(data));
+      if (!existedBefore) {
+        debugPrint('[JsonFileManager] created ${file.path}');
+      }
     } catch (e) {
       debugPrint('Error saving ${file.path}: $e');
       rethrow;
