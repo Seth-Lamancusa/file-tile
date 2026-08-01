@@ -137,7 +137,12 @@ class DesktopViewModel extends ChangeNotifier {
   DesktopViewModel({DesktopRepository? repository})
       : _repository = repository ?? FileSystemDesktopRepository() {
     _currentDirectory = _repository.initialDirectory;
+    _selectionController.addListener(_onSelectionChanged);
     _init();
+  }
+
+  void _onSelectionChanged() {
+    notifyListeners();
   }
 
   void _setError(String message) {

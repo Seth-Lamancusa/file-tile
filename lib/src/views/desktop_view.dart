@@ -26,22 +26,15 @@ class _DesktopViewState extends State<DesktopView> {
   void initState() {
     super.initState();
     _focusNode = FocusNode();
-    HardwareKeyboard.instance.addHandler(_handleRawKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
-      // Initialize the click handler with the selection controller from the ViewModel
       final viewModel = context.read<DesktopViewModel>();
       _clickHandler = ClickHandler(selectionController: viewModel.selectionController);
     });
   }
 
-  bool _handleRawKeyEvent(KeyEvent event) {
-    return false;
-  }
-
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_handleRawKeyEvent);
     _focusNode.dispose();
     super.dispose();
   }
@@ -142,7 +135,6 @@ class _DesktopViewState extends State<DesktopView> {
                   nodes: nodes,
                   coords: viewModel.coords,
                 );
-                viewModel.notifyListeners();
               }
             },
             onPointerSignal: (pointerSignal) {
@@ -213,7 +205,6 @@ class _DesktopViewState extends State<DesktopView> {
                       onSecondaryTapDown: (details) {
                         if (!isSelected) {
                           viewModel.selectionController.selectSingle(node.name);
-                          viewModel.notifyListeners();
                         }
                         _showNodeContextMenu(context, details.globalPosition, viewModel);
                       },
