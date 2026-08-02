@@ -67,15 +67,33 @@ lib/
 │       └── coordinate_space.dart   # Coordinate transformations
 ```
 
+### Notes
+
+
+**Dialog & Menu Sizing**
+To properly control width on an `AlertDialog`:
+- **Set `insetPadding`** on the `AlertDialog` (e.g., `EdgeInsets.symmetric(horizontal: 20.0)`)
+- **Wrap content in `SizedBox`** with the desired width, using `MediaQuery.of(context).size.width * 0.33` for responsive sizing
+
+**Best Practices**
+When implementing new features,
+- Refer to `/docs/flutter/flutter-best-practices.md` for guidance
+
 ## Keyboard & Mouse Controls
 
 | Action | Control |
 |--------|---------|
-| Zoom In | Scroll Up |
-| Zoom Out | Scroll Down |
+| Zoom In | Ctrl + Scroll Up |
+| Zoom Out | Ctrl + Scroll Down |
 | Pan | Click + Drag |
+| Pan (Horizontal) | Shift + Scroll |
+| Selection Box | Shift + Drag |
+| Select Single | Left Click |
+| Toggle Select | Ctrl + Click |
+| Range Select | Shift + Click |
 | Context Menu | Right Click |
 | Open Item | Double Click (folders) or Right Click → Open |
+| Delete Selected | Delete Key |
 | Navigate Back | Back Button |
 | Navigate Forward | Forward Button |
 

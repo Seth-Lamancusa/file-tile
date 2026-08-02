@@ -4,6 +4,7 @@ import '../models/new_element_placement_config.dart';
 import '../services/path_service.dart';
 import '../utils/config_manager.dart';
 import '../utils/metadata_helper.dart';
+import '../utils/trash_helper.dart';
 import 'desktop_repository.dart';
 
 /// [DesktopRepository] implementation backed by the real filesystem.
@@ -32,10 +33,22 @@ class FileSystemDesktopRepository implements DesktopRepository {
 
   @override
   Future<List<DesktopEntity>> listEntities(String path) async {
-    final entities = await Directory(path).list().toList();
-    return entities
-        .map((e) => DesktopEntity(name: p.basename(e.path), isDirectory: e is Directory))
-        .toList();
+    final entities = await Directory(path).list(followLinks: false).toList();
+    return entities.map((e) {
+      bool isDir = e is Directory;
+      bool isSymlink = e is Link;
+
+      if (e is Link) {
+        final type = FileSystemEntity.typeSync(e.path);
+        isDir = type == FileSystemEntityType.directory;
+      }
+
+      return DesktopEntity(
+        name: p.basename(e.path),
+        isDirectory: isDir,
+        isSymlink: isSymlink,
+      );
+    }).toList();
   }
 
   @override
@@ -56,10 +69,8 @@ class FileSystemDesktopRepository implements DesktopRepository {
 
   @override
   Future<void> delete(String path) async {
-    if (await File(path).exists()) {
-      await File(path).delete();
-    } else if (await Directory(path).exists()) {
-      await Directory(path).delete(recursive: true);
+    if (await File(path).exists() || await Directory(path).exists()) {
+      await sendToTrash(path);
     } else {
       throw FileSystemException('Path does not exist', path);
     }

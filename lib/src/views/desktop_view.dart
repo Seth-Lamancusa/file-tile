@@ -10,9 +10,10 @@ import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
 import '../widgets/placement_region_painter.dart';
+import '../widgets/selection_box_painter.dart';
 import '../utils/coordinate_space.dart';
 
-export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction;
+export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction, MoveConflictException;
 
 class DesktopView extends StatefulWidget {
   const DesktopView({super.key});
@@ -31,6 +32,8 @@ class _DesktopViewState extends State<DesktopView> {
   BoxConstraints? _canvasConstraints;
   Timer? _autoScrollTimer;
   Map<String, Offset> _nodeOffsetFromCursor = {};
+  Offset? _selectionBoxStart;
+  Offset? _selectionBoxEnd;
   static const double _autoScrollMaxSpeed = 17.0;
   static const double _autoScrollEdgeZoneMin = 20.0;
   static const double _autoScrollEdgeZoneMax = 60.0;
@@ -107,6 +110,28 @@ class _DesktopViewState extends State<DesktopView> {
   void _stopAutoScrollTimer() {
     _autoScrollTimer?.cancel();
     _autoScrollTimer = null;
+  }
+
+  List<String> _getNodesInSelectionBox(Offset start, Offset end) {
+    final viewModel = context.read<DesktopViewModel>();
+    final selectionRect = Rect.fromPoints(start, end);
+    final selectedNodeIds = <String>[];
+
+    for (final node in viewModel.nodes) {
+      final screenPos = viewModel.coords.logicalToScreen(node.position);
+      final nodeRect = Rect.fromLTWH(
+        screenPos.dx,
+        screenPos.dy,
+        GridConfig.gridCellSize * viewModel.scale,
+        GridConfig.gridCellSize * viewModel.scale,
+      );
+
+      if (selectionRect.overlaps(nodeRect)) {
+        selectedNodeIds.add(node.name);
+      }
+    }
+
+    return selectedNodeIds;
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
@@ -313,8 +338,44 @@ class _DesktopViewState extends State<DesktopView> {
                 Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
+                    onPanDown: (details) {
+                      if (HardwareKeyboard.instance.isShiftPressed) {
+                        setState(() {
+                          _selectionBoxStart = details.localPosition;
+                          _selectionBoxEnd = details.localPosition;
+                        });
+                      }
+                    },
                     onPanUpdate: (details) {
-                      viewModel.offset = viewModel.offset + details.delta;
+                      if (_selectionBoxStart != null) {
+                        setState(() {
+                          _selectionBoxEnd = details.localPosition;
+                        });
+                      } else {
+                        viewModel.offset = viewModel.offset + details.delta;
+                      }
+                    },
+                    onPanCancel: () {
+                      if (_selectionBoxStart != null) {
+                        setState(() {
+                          _selectionBoxStart = null;
+                          _selectionBoxEnd = null;
+                        });
+                      }
+                    },
+                    onPanEnd: (details) {
+                      if (_selectionBoxStart != null && _selectionBoxEnd != null) {
+                        final selectedNodeIds = _getNodesInSelectionBox(_selectionBoxStart!, _selectionBoxEnd!);
+                        if (selectedNodeIds.isNotEmpty) {
+                          viewModel.selectionController.rangeSelect(selectedNodeIds);
+                        } else {
+                          viewModel.selectionController.clearSelection();
+                        }
+                        setState(() {
+                          _selectionBoxStart = null;
+                          _selectionBoxEnd = null;
+                        });
+                      }
                     },
                     child: ClipRect(
                       child: CustomPaint(
@@ -327,6 +388,18 @@ class _DesktopViewState extends State<DesktopView> {
                     ),
                   ),
                 ),
+                if (_selectionBoxStart != null && _selectionBoxEnd != null)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        size: Size.infinite,
+                        painter: SelectionBoxPainter(
+                          start: _selectionBoxStart!,
+                          end: _selectionBoxEnd!,
+                        ),
+                      ),
+                    ),
+                  ),
                 Positioned.fill(
                   child: IgnorePointer(
                     child: CustomPaint(
@@ -447,7 +520,16 @@ class _DesktopViewState extends State<DesktopView> {
                         // Check breadcrumbs first (higher priority than grid)
                         final breadcrumbPath = _hitTestBreadcrumb(details.globalPosition);
                         if (breadcrumbPath != null && !nodesDragged.contains(p.basename(breadcrumbPath))) {
-                          await viewModel.moveNodesToDirectory(nodesDragged, breadcrumbPath);
+                          try {
+                            await viewModel.moveNodesToDirectory(nodesDragged, breadcrumbPath);
+                          } on MoveConflictException catch (e) {
+                            viewModel.revertDragPositions(nodesDragged);
+                            if (mounted) {
+                              await _showMoveConflictDialog(context, nodesDragged, breadcrumbPath, e.conflictingNames);
+                            }
+                          } catch (e) {
+                            viewModel.revertDragPositions(nodesDragged);
+                          }
                           setState(() {
                             _dragTargetNodeName = null;
                             _dragTargetBreadcrumbPath = null;
@@ -463,7 +545,16 @@ class _DesktopViewState extends State<DesktopView> {
                           excludeNodeNames: nodesDragged,
                         );
                         if (targetDirectory != null) {
-                          await viewModel.moveNodesToDirectory(nodesDragged, targetDirectory);
+                          try {
+                            await viewModel.moveNodesToDirectory(nodesDragged, targetDirectory);
+                          } on MoveConflictException catch (e) {
+                            viewModel.revertDragPositions(nodesDragged);
+                            if (mounted) {
+                              await _showMoveConflictDialog(context, nodesDragged, targetDirectory, e.conflictingNames);
+                            }
+                          } catch (e) {
+                            viewModel.revertDragPositions(nodesDragged);
+                          }
                           setState(() {
                             _dragTargetNodeName = null;
                             _dragTargetBreadcrumbPath = null;
@@ -516,6 +607,36 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
+  void _handleContextMenuShiftDragStart(Offset globalPos) {
+    final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+    setState(() {
+      _selectionBoxStart = canvasPosition;
+      _selectionBoxEnd = canvasPosition;
+    });
+  }
+
+  void _handleContextMenuShiftDragUpdate(Offset globalPos) {
+    final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+    setState(() {
+      _selectionBoxEnd = canvasPosition;
+    });
+  }
+
+  void _handleContextMenuShiftDragEnd(DesktopViewModel viewModel) {
+    if (_selectionBoxStart != null && _selectionBoxEnd != null) {
+      final selectedNodeIds = _getNodesInSelectionBox(_selectionBoxStart!, _selectionBoxEnd!);
+      if (selectedNodeIds.isNotEmpty) {
+        viewModel.selectionController.rangeSelect(selectedNodeIds);
+      } else {
+        viewModel.selectionController.clearSelection();
+      }
+    }
+    setState(() {
+      _selectionBoxStart = null;
+      _selectionBoxEnd = null;
+    });
+  }
+
   void _showBackgroundContextMenu(BuildContext context, Offset globalPosition, Offset logicalPosition, DesktopViewModel viewModel) {
     CascadingMenu.show(
       context,
@@ -559,6 +680,9 @@ class _DesktopViewState extends State<DesktopView> {
             _showBackgroundContextMenu(context, globalPos, result.logicalPosition, viewModel);
         }
       },
+      onBarrierShiftDragStart: _handleContextMenuShiftDragStart,
+      onBarrierShiftDragUpdate: _handleContextMenuShiftDragUpdate,
+      onBarrierShiftDragEnd: () => _handleContextMenuShiftDragEnd(viewModel),
       items: [
         CascadingMenuItem(
           label: 'New Folder',
@@ -777,6 +901,9 @@ class _DesktopViewState extends State<DesktopView> {
             _showBackgroundContextMenu(context, globalPos, result.logicalPosition, viewModel);
         }
       },
+      onBarrierShiftDragStart: _handleContextMenuShiftDragStart,
+      onBarrierShiftDragUpdate: _handleContextMenuShiftDragUpdate,
+      onBarrierShiftDragEnd: () => _handleContextMenuShiftDragEnd(viewModel),
       items: items,
     );
   }
@@ -967,9 +1094,12 @@ class _DesktopViewState extends State<DesktopView> {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           backgroundColor: const Color(0xFF1E1E1E),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20.0),
           title: const Text('Settings', style: TextStyle(color: Colors.white)),
-          content: SingleChildScrollView(
-            child: Column(
+          content: SizedBox(
+            width: MediaQuery.of(context).size.width * 0.33,
+            child: SingleChildScrollView(
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Selection Controls
@@ -981,6 +1111,7 @@ class _DesktopViewState extends State<DesktopView> {
                 _buildControlRow('Left Click', 'Select single node'),
                 _buildControlRow('Ctrl + Click', 'Toggle select node'),
                 _buildControlRow('Shift + Click', 'Range select (rectangular area)'),
+                _buildControlRow('Shift + Drag', 'Selection box (select multiple nodes)'),
                 _buildControlRow('Right Click', 'Open context menu'),
                 _buildControlRow('Delete', 'Delete selected nodes'),
                 _buildControlRow('Double-Click Folder', 'Open folder'),
@@ -1020,6 +1151,7 @@ class _DesktopViewState extends State<DesktopView> {
                   activeThumbColor: Colors.blueAccent,
                 ),
               ],
+              ),
             ),
           ),
           actions: [
@@ -1144,6 +1276,54 @@ class _DesktopViewState extends State<DesktopView> {
 
     return null;
   }
+
+  Future<void> _showMoveConflictDialog(
+    BuildContext context,
+    Set<String> nodeNames,
+    String targetPath,
+    List<String> conflictingNames,
+  ) async {
+    final viewModel = context.read<DesktopViewModel>();
+    final nonConflicting = nodeNames.where((n) => !conflictingNames.contains(n)).toList();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Move Conflict'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${conflictingNames.length} item${conflictingNames.length > 1 ? "s" : ""} already exist${conflictingNames.length > 1 ? "" : "s"} in the destination:'),
+            const SizedBox(height: 8),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: conflictingNames.map((name) => Text('• $name')).toList(),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          if (nonConflicting.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                viewModel.moveNodesToDirectorySkippingConflicts(nodeNames, targetPath);
+              },
+              child: const Text('Skip Conflicts'),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 enum _BorderSide { top, right, bottom, left }
@@ -1205,29 +1385,53 @@ class _DesktopNodeWidget extends StatelessWidget {
                 : BorderSide.none,
             ),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Stack(
         children: [
-          Icon(
-            node.isDirectory ? Icons.folder : Icons.description,
-            color: effectiveColor.withValues(alpha: 0.8),
-            size: size * 0.45,
-          ),
-          SizedBox(height: size * 0.05),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4.0),
-            child: Text(
-              node.name,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.8),
-                fontSize: (size * 0.16).clamp(6.0, 16.0),
-                height: 1.1,
-              ),
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  node.isDirectory ? Icons.folder : Icons.description,
+                  color: effectiveColor.withValues(alpha: 0.8),
+                  size: size * 0.45,
+                ),
+                SizedBox(height: size * 0.05),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                  child: Text(
+                    node.name,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.8),
+                      fontSize: (size * 0.16).clamp(6.0, 16.0),
+                      height: 1.1,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
+          if (node.isSymlink)
+            Positioned(
+              top: size * 0.02,
+              right: size * 0.02,
+              child: Container(
+                width: size * 0.22,
+                height: size * 0.22,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.7),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.link,
+                  color: Colors.white.withValues(alpha: 0.8),
+                  size: size * 0.13,
+                ),
+              ),
+            ),
         ],
       ),
     );

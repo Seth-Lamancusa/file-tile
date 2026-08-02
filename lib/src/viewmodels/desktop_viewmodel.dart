@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -14,6 +15,20 @@ enum DesktopSelectAction {
   delete,
 }
 
+/// Exception thrown when moving nodes results in naming conflicts.
+class MoveConflictException implements Exception {
+  final List<String> conflictingNames;
+  final String targetPath;
+
+  MoveConflictException({
+    required this.conflictingNames,
+    required this.targetPath,
+  });
+
+  @override
+  String toString() => 'MoveConflictException: ${conflictingNames.join(", ")} already exist in target directory';
+}
+
 /// Sentinel used by [DesktopNode.copyWith] to distinguish "leave color
 /// unchanged" from "set color to null".
 const _unset = Object();
@@ -21,12 +36,14 @@ const _unset = Object();
 class DesktopNode {
   final String name;
   final bool isDirectory;
+  final bool isSymlink;
   final Offset position;
   final Color? color;
 
   const DesktopNode({
     required this.name,
     required this.isDirectory,
+    this.isSymlink = false,
     this.position = Offset.zero,
     this.color,
   });
@@ -35,6 +52,7 @@ class DesktopNode {
     return DesktopNode(
       name: name,
       isDirectory: isDirectory,
+      isSymlink: isSymlink,
       position: position ?? this.position,
       color: identical(color, _unset) ? this.color : color as Color?,
     );
@@ -80,6 +98,10 @@ class DesktopViewModel extends ChangeNotifier {
 
   final Map<String, bool> _availableApps = {};
   Map<String, bool> get availableApps => _availableApps;
+
+  // Polling for directory changes
+  Timer? _refreshTimer;
+  Set<String> _lastPolledEntityNames = {};
 
   final List<Map<String, String>> _appRegistry = [
     {'name': 'VS Code', 'cmd': 'code', 'icon': 'code'},
@@ -259,6 +281,32 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
+  void _startPolling() {
+    _stopPolling();
+    _refreshTimer = Timer.periodic(Duration(seconds: 2), (_) {
+      _pollForChanges();
+    });
+  }
+
+  void _stopPolling() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+  }
+
+  Future<void> _pollForChanges() async {
+    try {
+      final entities = await _repository.listEntities(_currentDirectory);
+      final currentNames = entities.map((e) => e.name).toSet();
+
+      if (currentNames != _lastPolledEntityNames) {
+        _lastPolledEntityNames = currentNames;
+        await loadDirectory(_currentDirectory, addToHistory: false, force: true, isPolledRefresh: true);
+      }
+    } catch (e) {
+      debugPrint('Error polling for directory changes: $e');
+    }
+  }
+
   set scale(double value) {
     if (_scale != value) {
       _scale = value;
@@ -295,16 +343,19 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> loadDirectory(String path, {bool addToHistory = true, bool clearForward = true, bool force = false}) async {
+  Future<void> loadDirectory(String path, {bool addToHistory = true, bool clearForward = true, bool force = false, bool isPolledRefresh = false}) async {
     if (!force && path == _currentDirectory && _nodes.isNotEmpty) return;
 
     if (_initialized) {
       await _saveViewState();
     }
 
-    _selectionController.clearSelection();
-    _isLoading = true;
-    notifyListeners();
+    _stopPolling();
+    if (!isPolledRefresh) {
+      _selectionController.clearSelection();
+      _isLoading = true;
+      notifyListeners();
+    }
 
     try {
       if (!await _repository.directoryExists(path)) {
@@ -370,6 +421,7 @@ class DesktopViewModel extends ChangeNotifier {
           loadedNodes.add(DesktopNode(
             name: name,
             isDirectory: e.isDirectory,
+            isSymlink: e.isSymlink,
             position: pos,
             color: nodeColor,
           ));
@@ -390,13 +442,12 @@ class DesktopViewModel extends ChangeNotifier {
         loadedNodes.add(DesktopNode(
           name: name,
           isDirectory: e.isDirectory,
+          isSymlink: e.isSymlink,
           position: pos,
         ));
       }
 
       _nodes = List.unmodifiable(loadedNodes);
-      debugPrint('[DesktopViewModel] rendering ${_nodes.length} node(s) for $path: '
-          '${_nodes.map((n) => n.name).toList()}');
 
       if (unpositionedEntities.isNotEmpty) {
         _saveMetadata();
@@ -421,6 +472,8 @@ class DesktopViewModel extends ChangeNotifier {
       _setError("Couldn't load this folder");
     } finally {
       _isLoading = false;
+      _lastPolledEntityNames = _nodes.map((n) => n.name).toSet();
+      _startPolling();
       notifyListeners();
     }
   }
@@ -592,6 +645,17 @@ class DesktopViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Revert dragged nodes to their pre-drag positions. Call this when a move fails.
+  void revertDragPositions(Set<String> nodeNames) {
+    for (final nodeName in nodeNames) {
+      if (_dragStartPositions.containsKey(nodeName)) {
+        _replaceNode(nodeName, (n) => n.copyWith(position: _dragStartPositions[nodeName]!));
+      }
+    }
+    notifyListeners();
+    _dragStartPositions.clear();
+  }
+
   /// Attempt to move nodes to a directory or snap to grid with collision detection.
   /// First checks if cursor is over a directory widget or breadcrumb to trigger a move.
   /// If no drop target is found, snaps to grid and reverts on collision.
@@ -641,18 +705,64 @@ class DesktopViewModel extends ChangeNotifier {
     await _saveMetadata();
   }
 
+  /// Resolves conflicts when moving nodes by skipping conflicting items.
+  /// Call this after a [MoveConflictException] and the user chooses to skip conflicts.
+  Future<void> moveNodesToDirectorySkippingConflicts(Set<String> nodeNames, String targetPath) async {
+    final filteredNodeNames = nodeNames.where((n) => n != 'stitch-grid.json').toSet();
+    if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
+
+    try {
+      final targetLayout = await _repository.readLayout(targetPath);
+      // Filter to only non-conflicting names
+      final nonConflicting = filteredNodeNames.where((name) => !targetLayout.containsKey(name)).toSet();
+
+      if (nonConflicting.isEmpty) {
+        debugPrint('All items have conflicts, skipping move');
+        return;
+      }
+
+      // Move only the non-conflicting items
+      await _performMove(nonConflicting, targetPath);
+    } catch (e) {
+      debugPrint('Error moving non-conflicting items: $e');
+      _setError("Couldn't move some items to that directory");
+    }
+  }
+
   /// Move a set of nodes to a target directory and auto-place them.
   /// Uses the same column-wrapping auto-placement logic.
   /// Does not navigate to the target directory.
+  /// Throws [MoveConflictException] if naming conflicts are detected.
   Future<void> moveNodesToDirectory(Set<String> nodeNames, String targetPath) async {
     // Filter out the metadata file (can't move stitch-grid.json)
     final filteredNodeNames = nodeNames.where((n) => n != 'stitch-grid.json').toSet();
 
     if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
 
+    // Check for conflicts before attempting move
+    try {
+      final targetLayout = await _repository.readLayout(targetPath);
+      final conflicts = filteredNodeNames.where((name) => targetLayout.containsKey(name)).toList();
+      if (conflicts.isNotEmpty) {
+        throw MoveConflictException(conflictingNames: conflicts, targetPath: targetPath);
+      }
+    } catch (e) {
+      if (e is MoveConflictException) rethrow;
+      debugPrint('Error checking for conflicts: $e');
+    }
+
+    try {
+      await _performMove(filteredNodeNames, targetPath);
+    } catch (e) {
+      debugPrint('Error moving nodes to directory: $e');
+      _setError("Couldn't move items to that directory");
+    }
+  }
+
+  Future<void> _performMove(Set<String> nodeNames, String targetPath) async {
     try {
       // Move each node in the filesystem
-      for (final nodeName in filteredNodeNames) {
+      for (final nodeName in nodeNames) {
         final sourcePath = p.join(_currentDirectory, nodeName);
         final destPath = p.join(targetPath, nodeName);
         await _repository.rename(sourcePath, destPath);
@@ -663,7 +773,7 @@ class DesktopViewModel extends ChangeNotifier {
 
       // Preserve node attributes before removing from source layout
       final movedNodeData = <String, Map<String, dynamic>>{};
-      for (final nodeName in filteredNodeNames) {
+      for (final nodeName in nodeNames) {
         if (sourceLayout.containsKey(nodeName)) {
           movedNodeData[nodeName] = Map<String, dynamic>.from(sourceLayout[nodeName] as Map);
         }
@@ -671,7 +781,7 @@ class DesktopViewModel extends ChangeNotifier {
 
       // Update layout for source directory (remove moved nodes)
       try {
-        for (final nodeName in filteredNodeNames) {
+        for (final nodeName in nodeNames) {
           sourceLayout.remove(nodeName);
         }
         await _repository.updateLayout(_currentDirectory, sourceLayout);
@@ -682,6 +792,7 @@ class DesktopViewModel extends ChangeNotifier {
       // Auto-place moved nodes in target directory
       try {
         final targetLayout = await _repository.readLayout(targetPath);
+        final targetPlacementConfig = await _repository.readNewElementPlacementConfig(targetPath);
         final usedPositions = <Offset>{};
         for (final entry in targetLayout.entries) {
           final pos = Offset(
@@ -691,15 +802,12 @@ class DesktopViewModel extends ChangeNotifier {
           usedPositions.add(pos);
         }
 
-        // Find positions for moved nodes
-        double nextX = 0;
-        double nextY = 0;
-        for (final nodeName in filteredNodeNames) {
-          final pos = findNextAvailablePosition(
-            Offset(nextX, nextY),
+        // Find positions for moved nodes using target directory's config
+        for (final nodeName in nodeNames) {
+          final pos = _findNextPositionUsingConfig(
+            targetPlacementConfig,
             usedPositions,
             gridSize,
-            5, // maxColumnsBeforeWrap
           );
           usedPositions.add(pos);
 
@@ -708,13 +816,6 @@ class DesktopViewModel extends ChangeNotifier {
           newEntry['x'] = pos.dx;
           newEntry['y'] = pos.dy;
           targetLayout[nodeName] = newEntry;
-
-          // Update nextX and nextY for the next search
-          nextX = pos.dx + gridSize;
-          if ((nextX / gridSize).round() >= 5) {
-            nextX = 0;
-            nextY = pos.dy + gridSize;
-          }
         }
 
         // Save target directory layout
@@ -726,8 +827,7 @@ class DesktopViewModel extends ChangeNotifier {
       // Reload source directory (stays in current view)
       await loadDirectory(_currentDirectory, addToHistory: false, force: true);
     } catch (e) {
-      debugPrint('Error moving nodes to directory: $e');
-      _setError("Couldn't move items to that directory");
+      rethrow;
     }
   }
 
@@ -792,6 +892,13 @@ class DesktopViewModel extends ChangeNotifier {
       _history.add(_currentDirectory);
       loadDirectory(next, addToHistory: false);
     }
+  }
+
+  @override
+  void dispose() {
+    _stopPolling();
+    _selectionController.removeListener(_onSelectionChanged);
+    super.dispose();
   }
 
   Offset _findNextPositionUsingConfig(

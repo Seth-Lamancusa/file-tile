@@ -4,8 +4,9 @@ import '../models/new_element_placement_config.dart';
 class DesktopEntity {
   final String name;
   final bool isDirectory;
+  final bool isSymlink;
 
-  DesktopEntity({required this.name, required this.isDirectory});
+  DesktopEntity({required this.name, required this.isDirectory, this.isSymlink = false});
 }
 
 /// Abstraction over the filesystem access `DesktopViewModel` needs.

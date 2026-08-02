@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 typedef MenuItemCallback = void Function();
 typedef BarrierTapCallback = void Function(Offset position);
@@ -38,6 +39,9 @@ class CascadingMenu extends StatefulWidget {
   final VoidCallback? onClose;
   final BarrierTapCallback? onBarrierLeftTapped;
   final BarrierTapCallback? onBarrierRightTapped;
+  final ValueChanged<Offset>? onBarrierShiftDragStart;
+  final ValueChanged<Offset>? onBarrierShiftDragUpdate;
+  final VoidCallback? onBarrierShiftDragEnd;
 
   const CascadingMenu({
     super.key,
@@ -47,6 +51,9 @@ class CascadingMenu extends StatefulWidget {
     this.onClose,
     this.onBarrierLeftTapped,
     this.onBarrierRightTapped,
+    this.onBarrierShiftDragStart,
+    this.onBarrierShiftDragUpdate,
+    this.onBarrierShiftDragEnd,
   });
 
   static void show(
@@ -57,6 +64,9 @@ class CascadingMenu extends StatefulWidget {
     VoidCallback? onClose,
     BarrierTapCallback? onBarrierLeftTapped,
     BarrierTapCallback? onBarrierRightTapped,
+    ValueChanged<Offset>? onBarrierShiftDragStart,
+    ValueChanged<Offset>? onBarrierShiftDragUpdate,
+    VoidCallback? onBarrierShiftDragEnd,
   }) {
     showGeneralDialog(
       context: context,
@@ -71,6 +81,9 @@ class CascadingMenu extends StatefulWidget {
         onClose: onClose,
         onBarrierLeftTapped: onBarrierLeftTapped,
         onBarrierRightTapped: onBarrierRightTapped,
+        onBarrierShiftDragStart: onBarrierShiftDragStart,
+        onBarrierShiftDragUpdate: onBarrierShiftDragUpdate,
+        onBarrierShiftDragEnd: onBarrierShiftDragEnd,
       ),
     );
   }
@@ -80,7 +93,23 @@ class CascadingMenu extends StatefulWidget {
 }
 
 class _CascadingMenuState extends State<CascadingMenu> {
+  bool _shiftDragActive = false;
+  bool _hideMenu = false;
+
   void _handleBarrierPointerDown(PointerDownEvent event) {
+    // Shift+drag should close the menu and start a selection box, but the
+    // drag gesture began on this barrier - keep the barrier mounted so we
+    // keep receiving the move/up events for this pointer, and pop only once
+    // the drag completes (mirrors normal selection-box behavior).
+    if (event.buttons & kPrimaryButton != 0 && HardwareKeyboard.instance.isShiftPressed) {
+      setState(() {
+        _shiftDragActive = true;
+        _hideMenu = true;
+      });
+      widget.onBarrierShiftDragStart?.call(event.position);
+      return;
+    }
+
     Navigator.pop(context);
     widget.onClose?.call();
 
@@ -91,6 +120,19 @@ class _CascadingMenuState extends State<CascadingMenu> {
     }
   }
 
+  void _handleBarrierPointerMove(PointerMoveEvent event) {
+    if (_shiftDragActive) {
+      widget.onBarrierShiftDragUpdate?.call(event.position);
+    }
+  }
+
+  void _endShiftDrag() {
+    _shiftDragActive = false;
+    widget.onBarrierShiftDragEnd?.call();
+    Navigator.pop(context);
+    widget.onClose?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -98,22 +140,30 @@ class _CascadingMenuState extends State<CascadingMenu> {
         Positioned.fill(
           child: Listener(
             onPointerDown: _handleBarrierPointerDown,
+            onPointerMove: _handleBarrierPointerMove,
+            onPointerUp: (_) {
+              if (_shiftDragActive) _endShiftDrag();
+            },
+            onPointerCancel: (_) {
+              if (_shiftDragActive) _endShiftDrag();
+            },
             behavior: HitTestBehavior.opaque,
             child: Container(),
           ),
         ),
-        Positioned(
-          left: widget.position.dx,
-          top: widget.position.dy,
-          child: _MenuPanel(
-            items: widget.items,
-            backgroundColor: widget.backgroundColor,
-            onClose: () {
-              Navigator.pop(context);
-              widget.onClose?.call();
-            },
+        if (!_hideMenu)
+          Positioned(
+            left: widget.position.dx,
+            top: widget.position.dy,
+            child: _MenuPanel(
+              items: widget.items,
+              backgroundColor: widget.backgroundColor,
+              onClose: () {
+                Navigator.pop(context);
+                widget.onClose?.call();
+              },
+            ),
           ),
-        ),
       ],
     );
   }
