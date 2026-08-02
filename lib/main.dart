@@ -23,16 +23,30 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Stitch Desktop Grid',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-        colorSchemeSeed: Colors.indigo,
-      ),
-      home: ChangeNotifierProvider(
-        create: (_) => DesktopViewModel(),
-        child: const DesktopViewPage(),
+    return ChangeNotifierProvider(
+      create: (_) => DesktopViewModel(),
+      child: Consumer<DesktopViewModel>(
+        builder: (context, viewModel, _) {
+          return MaterialApp(
+            title: 'Stitch Desktop Grid',
+            themeMode: viewModel.themeMode,
+            theme: ThemeData(
+              brightness: Brightness.light,
+              useMaterial3: true,
+              colorSchemeSeed: Colors.indigo,
+              scaffoldBackgroundColor: StitchColors.light.background,
+              extensions: const [StitchColors.light],
+            ),
+            darkTheme: ThemeData(
+              brightness: Brightness.dark,
+              useMaterial3: true,
+              colorSchemeSeed: Colors.indigo,
+              scaffoldBackgroundColor: StitchColors.dark.background,
+              extensions: const [StitchColors.dark],
+            ),
+            home: const DesktopViewPage(),
+          );
+        },
       ),
     );
   }

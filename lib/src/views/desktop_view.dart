@@ -12,6 +12,7 @@ import '../widgets/cascading_menu.dart';
 import '../widgets/placement_region_painter.dart';
 import '../widgets/selection_box_painter.dart';
 import '../utils/coordinate_space.dart';
+import '../theme/stitch_colors.dart';
 
 export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction, MoveConflictException;
 
@@ -193,6 +194,7 @@ class _DesktopViewState extends State<DesktopView> {
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<DesktopViewModel>();
+    final colors = Theme.of(context).extension<StitchColors>()!;
 
     final error = viewModel.lastError;
     if (error != null) {
@@ -205,9 +207,9 @@ class _DesktopViewState extends State<DesktopView> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: colors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E1E1E),
+        backgroundColor: colors.surface,
         toolbarHeight: AppConfig.appBarHeight,
         title: Row(
           children: [
@@ -215,13 +217,13 @@ class _DesktopViewState extends State<DesktopView> {
               icon: const Icon(Icons.arrow_back, size: 18),
               onPressed: viewModel.canGoBack ? viewModel.back : null,
               tooltip: 'Back',
-              color: viewModel.canGoBack ? Colors.white : Colors.grey,
+              color: viewModel.canGoBack ? colors.textPrimary : colors.iconDisabled,
             ),
             IconButton(
               icon: const Icon(Icons.arrow_forward, size: 18),
               onPressed: viewModel.canGoForward ? viewModel.forward : null,
               tooltip: 'Forward',
-              color: viewModel.canGoForward ? Colors.white : Colors.grey,
+              color: viewModel.canGoForward ? colors.textPrimary : colors.iconDisabled,
             ),
             IconButton(
               icon: const Icon(Icons.arrow_upward, size: 18),
@@ -295,7 +297,7 @@ class _DesktopViewState extends State<DesktopView> {
                 );
 
                 switch (result) {
-                  case NodeClickResult(nodeId: final nodeId):
+                  case NodeClickResult():
                     // Click handler already selected the node
                     _showNodeContextMenu(context, event.position, viewModel);
                   case BackgroundClickResult():
@@ -383,6 +385,8 @@ class _DesktopViewState extends State<DesktopView> {
                         painter: GridPainter(
                           offset: viewModel.offset,
                           scale: viewModel.scale,
+                          lineColor: colors.gridLine,
+                          originLineColor: colors.gridLineOrigin,
                         ),
                       ),
                     ),
@@ -911,20 +915,21 @@ class _DesktopViewState extends State<DesktopView> {
   Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory, Offset? gridPosition, Offset? originalLogicalPos}) async {
     final controller = TextEditingController();
     final type = isDirectory ? 'Folder' : 'File';
+    final colors = Theme.of(context).extension<StitchColors>()!;
 
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: Text('New $type', style: const TextStyle(color: Colors.white)),
+        backgroundColor: colors.surface,
+        title: Text('New $type', style: TextStyle(color: colors.textPrimary)),
         content: TextField(
           controller: controller,
           autofocus: true,
-          style: const TextStyle(color: Colors.white),
+          style: TextStyle(color: colors.textPrimary),
           decoration: InputDecoration(
             hintText: 'Enter name',
-            hintStyle: const TextStyle(color: Colors.white54),
-            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            hintStyle: TextStyle(color: colors.textDim),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: colors.borderSubtle)),
           ),
           onSubmitted: (value) {
             if (value.isNotEmpty) {
@@ -964,20 +969,21 @@ class _DesktopViewState extends State<DesktopView> {
     await Future.delayed(const Duration(milliseconds: 100));
     if (!context.mounted) return;
     final controller = TextEditingController(text: node.name);
+    final colors = Theme.of(context).extension<StitchColors>()!;
 
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text('Rename', style: TextStyle(color: Colors.white)),
+        backgroundColor: colors.surface,
+        title: Text('Rename', style: TextStyle(color: colors.textPrimary)),
         content: TextField(
           controller: controller,
           autofocus: true,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
+          style: TextStyle(color: colors.textPrimary),
+          decoration: InputDecoration(
             hintText: 'Enter new name',
-            hintStyle: TextStyle(color: Colors.white54),
-            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            hintStyle: TextStyle(color: colors.textDim),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: colors.borderSubtle)),
           ),
           onSubmitted: (value) {
             if (value.isNotEmpty && value != node.name) {
@@ -1018,11 +1024,12 @@ class _DesktopViewState extends State<DesktopView> {
   }
 
   Future<void> _runScript(BuildContext context, DesktopViewModel viewModel, String tool, String fileName) async {
+    final colors = Theme.of(context).extension<StitchColors>()!;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Running $fileName with $tool...'),
         duration: const Duration(seconds: 1),
-        backgroundColor: Colors.blueAccent,
+        backgroundColor: colors.accent,
       ),
     );
 
@@ -1033,12 +1040,12 @@ class _DesktopViewState extends State<DesktopView> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: Text('Result: $fileName ($tool)', style: const TextStyle(color: Colors.white, fontSize: 16)),
+        backgroundColor: colors.surface,
+        title: Text('Result: $fileName ($tool)', style: TextStyle(color: colors.textPrimary, fontSize: 16)),
         content: SingleChildScrollView(
           child: SelectableText(
             result,
-            style: const TextStyle(color: Colors.white70, fontFamily: 'monospace', fontSize: 12),
+            style: TextStyle(color: colors.textSecondary, fontFamily: 'monospace', fontSize: 12),
           ),
         ),
         actions: [
@@ -1060,14 +1067,15 @@ class _DesktopViewState extends State<DesktopView> {
     final deleteMessage = isMultiple
         ? 'Are you sure you want to delete ${selectedNames.length} items?\n\n${selectedNames.join('\n')}'
         : 'Are you sure you want to delete "${selectedNames.first}"?';
+    final colors = Theme.of(context).extension<StitchColors>()!;
 
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text('Delete', style: TextStyle(color: Colors.white)),
+        backgroundColor: colors.surface,
+        title: Text('Delete', style: TextStyle(color: colors.textPrimary)),
         content: SingleChildScrollView(
-          child: Text(deleteMessage, style: const TextStyle(color: Colors.white70)),
+          child: Text(deleteMessage, style: TextStyle(color: colors.textSecondary)),
         ),
         actions: [
           TextButton(
@@ -1091,81 +1099,114 @@ class _DesktopViewState extends State<DesktopView> {
   void _showSettingsModal(BuildContext context, DesktopViewModel viewModel) {
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E1E1E),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20.0),
-          title: const Text('Settings', style: TextStyle(color: Colors.white)),
-          content: SizedBox(
-            width: MediaQuery.of(context).size.width * 0.33,
-            child: SingleChildScrollView(
-              child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Selection Controls
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Selection Controls', style: TextStyle(color: Colors.white70, fontSize: 12)),
+      builder: (context) {
+        final colors = Theme.of(context).extension<StitchColors>()!;
+        return StatefulBuilder(
+          builder: (context, setState) => Dialog(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.33,
+                maxHeight: MediaQuery.of(context).size.height * 0.8,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Material(
+                  color: colors.surface,
+                  child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Text('Settings', style: TextStyle(color: colors.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Appearance
+                              Text('Appearance', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
+                              const SizedBox(height: 12),
+                              SwitchListTile(
+                                title: Text('Dark Mode', style: TextStyle(color: colors.textPrimary)),
+                                value: viewModel.isDarkMode,
+                                onChanged: (value) {
+                                  viewModel.isDarkMode = value;
+                                  setState(() {});
+                                },
+                                activeThumbColor: colors.accent,
+                              ),
+                              const SizedBox(height: 16),
+                              // Selection Controls
+                              Text('Selection Controls', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
+                              const SizedBox(height: 12),
+                              _buildControlRow(colors, 'Left Click', 'Select single node'),
+                              _buildControlRow(colors, 'Ctrl + Click', 'Toggle select node'),
+                              _buildControlRow(colors, 'Shift + Click', 'Range select (rectangular area)'),
+                              _buildControlRow(colors, 'Shift + Drag', 'Selection box (select multiple nodes)'),
+                              _buildControlRow(colors, 'Right Click', 'Open context menu'),
+                              _buildControlRow(colors, 'Delete', 'Delete selected nodes'),
+                              _buildControlRow(colors, 'Double-Click Folder', 'Open folder'),
+                              const SizedBox(height: 16),
+                              // Scroll & Pan Controls
+                              Text('Scroll & Pan Controls', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
+                              const SizedBox(height: 12),
+                              _buildControlRow(colors, 'Scroll', 'Vertical pan'),
+                              _buildControlRow(colors, 'Shift + Scroll', 'Horizontal pan'),
+                              _buildControlRow(colors, 'Ctrl + Scroll', 'Zoom in/out'),
+                              const SizedBox(height: 16),
+                              // Scroll Settings
+                              Text('Scroll Settings', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
+                              const SizedBox(height: 12),
+                              SwitchListTile(
+                                title: Text('Invert Vertical Scroll', style: TextStyle(color: colors.textPrimary)),
+                                value: viewModel.invertVerticalScroll,
+                                onChanged: (value) {
+                                  viewModel.invertVerticalScroll = value;
+                                  setState(() {});
+                                },
+                                activeThumbColor: colors.accent,
+                              ),
+                              SwitchListTile(
+                                title: Text('Invert Horizontal Scroll', style: TextStyle(color: colors.textPrimary)),
+                                value: viewModel.invertHorizontalScroll,
+                                onChanged: (value) {
+                                  viewModel.invertHorizontalScroll = value;
+                                  setState(() {});
+                                },
+                                activeThumbColor: colors.accent,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Close'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                _buildControlRow('Left Click', 'Select single node'),
-                _buildControlRow('Ctrl + Click', 'Toggle select node'),
-                _buildControlRow('Shift + Click', 'Range select (rectangular area)'),
-                _buildControlRow('Shift + Drag', 'Selection box (select multiple nodes)'),
-                _buildControlRow('Right Click', 'Open context menu'),
-                _buildControlRow('Delete', 'Delete selected nodes'),
-                _buildControlRow('Double-Click Folder', 'Open folder'),
-                const SizedBox(height: 16),
-                // Scroll & Pan Controls
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Scroll & Pan Controls', style: TextStyle(color: Colors.white70, fontSize: 12)),
                 ),
-                const SizedBox(height: 12),
-                _buildControlRow('Scroll', 'Vertical pan'),
-                _buildControlRow('Shift + Scroll', 'Horizontal pan'),
-                _buildControlRow('Ctrl + Scroll', 'Zoom in/out'),
-                const SizedBox(height: 16),
-                // Scroll Settings
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Scroll Settings', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                ),
-                const SizedBox(height: 12),
-                SwitchListTile(
-                  title: const Text('Invert Vertical Scroll', style: TextStyle(color: Colors.white)),
-                  value: viewModel.invertVerticalScroll,
-                  onChanged: (value) {
-                    viewModel.invertVerticalScroll = value;
-                    setState(() {});
-                  },
-                  activeThumbColor: Colors.blueAccent,
-                ),
-                SwitchListTile(
-                  title: const Text('Invert Horizontal Scroll', style: TextStyle(color: Colors.white)),
-                  value: viewModel.invertHorizontalScroll,
-                  onChanged: (value) {
-                    viewModel.invertHorizontalScroll = value;
-                    setState(() {});
-                  },
-                  activeThumbColor: Colors.blueAccent,
-                ),
-              ],
               ),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildControlRow(String control, String description) {
+  Widget _buildControlRow(StitchColors colors, String control, String description) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: Row(
@@ -1173,11 +1214,11 @@ class _DesktopViewState extends State<DesktopView> {
         children: [
           Text(
             control,
-            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+            style: TextStyle(color: colors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500),
           ),
           Text(
             description,
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
+            style: TextStyle(color: colors.textDim, fontSize: 12),
           ),
         ],
       ),
@@ -1351,12 +1392,13 @@ class _DesktopNodeWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).extension<StitchColors>()!;
     final size = gridSize * scale;
     final effectiveColor = node.color ?? (node.isDirectory ? directoryColor : fileColor);
 
     final borderColor = isSelected
       ? effectiveColor.withValues(alpha: 0.8)
-      : Colors.white.withValues(alpha: 0.05);
+      : colors.nodeBorderDefault;
     final borderWidth = isSelected ? 2.0 : 0.5;
 
     return Container(
@@ -1367,7 +1409,7 @@ class _DesktopNodeWidget extends StatelessWidget {
           ? effectiveColor.withValues(alpha: 0.15)
           : isSelected
             ? effectiveColor.withValues(alpha: 0.15)
-            : Colors.white.withValues(alpha: 0.02),
+            : colors.nodeBackgroundDefault,
         border: isDragTarget
           ? Border.all(color: Colors.transparent)
           : Border(
@@ -1393,7 +1435,7 @@ class _DesktopNodeWidget extends StatelessWidget {
               children: [
                 Icon(
                   node.isDirectory ? Icons.folder : Icons.description,
-                  color: effectiveColor.withValues(alpha: 0.8),
+                  color: effectiveColor,
                   size: size * 0.45,
                 ),
                 SizedBox(height: size * 0.05),
@@ -1405,7 +1447,7 @@ class _DesktopNodeWidget extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.8),
+                      color: colors.nodeLabelText,
                       fontSize: (size * 0.16).clamp(6.0, 16.0),
                       height: 1.1,
                     ),
@@ -1422,7 +1464,7 @@ class _DesktopNodeWidget extends StatelessWidget {
                 width: size * 0.22,
                 height: size * 0.22,
                 decoration: BoxDecoration(
-                  color: Colors.grey.withValues(alpha: 0.7),
+                  color: colors.symlinkBadgeBackground,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -1441,19 +1483,26 @@ class _DesktopNodeWidget extends StatelessWidget {
 class GridPainter extends CustomPainter {
   final Offset offset;
   final double scale;
+  final Color lineColor;
+  final Color originLineColor;
 
-  GridPainter({required this.offset, required this.scale});
+  GridPainter({
+    required this.offset,
+    required this.scale,
+    required this.lineColor,
+    required this.originLineColor,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     final gridSize = GridConfig.renderGridSize * scale;
 
     final paint = Paint()
-      ..color = const Color(0xFF2A2A2A)
+      ..color = lineColor
       ..strokeWidth = 1.0;
 
     final originPaint = Paint()
-      ..color = const Color(0xFF444444)
+      ..color = originLineColor
       ..strokeWidth = 1.5;
 
     double startX = offset.dx % gridSize;
@@ -1488,6 +1537,9 @@ class GridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant GridPainter oldDelegate) {
-    return oldDelegate.offset != offset || oldDelegate.scale != scale;
+    return oldDelegate.offset != offset ||
+        oldDelegate.scale != scale ||
+        oldDelegate.lineColor != lineColor ||
+        oldDelegate.originLineColor != originLineColor;
   }
 }

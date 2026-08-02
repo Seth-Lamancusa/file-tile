@@ -4,6 +4,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/stitch_colors.dart';
+
 typedef MenuItemCallback = void Function();
 typedef BarrierTapCallback = void Function(Offset position);
 
@@ -35,7 +37,7 @@ class CascadingMenuItem {
 class CascadingMenu extends StatefulWidget {
   final Offset position;
   final List<CascadingMenuItem> items;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final VoidCallback? onClose;
   final BarrierTapCallback? onBarrierLeftTapped;
   final BarrierTapCallback? onBarrierRightTapped;
@@ -47,7 +49,7 @@ class CascadingMenu extends StatefulWidget {
     super.key,
     required this.position,
     required this.items,
-    this.backgroundColor = const Color(0xFF1E1E1E),
+    this.backgroundColor,
     this.onClose,
     this.onBarrierLeftTapped,
     this.onBarrierRightTapped,
@@ -60,7 +62,7 @@ class CascadingMenu extends StatefulWidget {
     BuildContext context, {
     required Offset position,
     required List<CascadingMenuItem> items,
-    Color backgroundColor = const Color(0xFF1E1E1E),
+    Color? backgroundColor,
     VoidCallback? onClose,
     BarrierTapCallback? onBarrierLeftTapped,
     BarrierTapCallback? onBarrierRightTapped,
@@ -171,7 +173,7 @@ class _CascadingMenuState extends State<CascadingMenu> {
 
 class _MenuPanel extends StatefulWidget {
   final List<CascadingMenuItem> items;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final VoidCallback onClose;
 
   const _MenuPanel({
@@ -263,13 +265,16 @@ class _MenuPanelState extends State<_MenuPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).extension<StitchColors>()!;
+    final backgroundColor = widget.backgroundColor ?? colors.surface;
+
     return Material(
       color: Colors.transparent,
       child: IntrinsicWidth(
         child: Container(
           decoration: BoxDecoration(
-            color: widget.backgroundColor,
-            border: Border.all(color: Colors.white12, width: 1),
+            color: backgroundColor,
+            border: Border.all(color: colors.borderSubtle, width: 1),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Column(
@@ -282,7 +287,7 @@ class _MenuPanelState extends State<_MenuPanel> {
               if (item.isDivider) {
                 return Divider(
                   height: 1,
-                  color: Colors.white12,
+                  color: colors.borderSubtle,
                 );
               }
 
@@ -325,7 +330,7 @@ class _MenuPanelState extends State<_MenuPanel> {
                     : null,
                   child: Container(
                     color: isHovered
-                      ? Colors.white.withValues(alpha: 0.08)
+                      ? colors.overlayHover
                       : Colors.transparent,
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     child: Row(
@@ -334,7 +339,7 @@ class _MenuPanelState extends State<_MenuPanel> {
                         if (item.icon != null) ...[
                           Icon(
                             item.icon,
-                            color: item.iconColor ?? Colors.white70,
+                            color: item.iconColor ?? colors.textSecondary,
                             size: 20,
                           ),
                           const SizedBox(width: 12),
@@ -342,7 +347,7 @@ class _MenuPanelState extends State<_MenuPanel> {
                         Text(
                           item.label,
                           style: TextStyle(
-                            color: item.textColor ?? Colors.white,
+                            color: item.textColor ?? colors.textPrimary,
                             fontSize: 13,
                           ),
                         ),
@@ -350,7 +355,7 @@ class _MenuPanelState extends State<_MenuPanel> {
                           const Spacer(),
                           Icon(
                             Icons.chevron_right,
-                            color: Colors.white54,
+                            color: colors.textDim,
                             size: 16,
                           ),
                         ],

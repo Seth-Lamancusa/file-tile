@@ -61,7 +61,7 @@ class DesktopNode {
   Map<String, dynamic> toJson() => {
     'x': position.dx,
     'y': position.dy,
-    if (color != null) 'color': color!.value,
+    if (color != null) 'color': color!.toARGB32(),
   };
 }
 
@@ -78,14 +78,17 @@ class DesktopViewModel extends ChangeNotifier {
   Offset _offset = Offset.zero;
   bool _initialized = false;
 
-  Color _directoryColor = const Color(0xFFEBC351);
-  Color _fileColor = const Color(0xFF64B5F6);
-
   bool _invertVerticalScroll = false;
   bool _invertHorizontalScroll = false;
+  ThemeMode _themeMode = ThemeMode.dark;
 
   bool get invertVerticalScroll => _invertVerticalScroll;
   bool get invertHorizontalScroll => _invertHorizontalScroll;
+  ThemeMode get themeMode => _themeMode;
+  bool get isDarkMode => _themeMode == ThemeMode.dark;
+
+  Color get directoryColor => isDarkMode ? const Color(0xFFEBC351) : const Color(0xFFF3C258);
+  Color get fileColor => isDarkMode ? const Color(0xFF64B5F6) : const Color(0xFF2196F3);
 
   final List<String> _history = [];
   final List<String> _forwardHistory = [];
@@ -129,30 +132,12 @@ class DesktopViewModel extends ChangeNotifier {
   String? get lastError => _lastError;
   double get scale => _scale;
   Offset get offset => _offset;
-  Color get directoryColor => _directoryColor;
-  Color get fileColor => _fileColor;
   Set<String> get selectedNodeNames => _selectionController.selected;
   bool isNodeSelected(String nodeName) => _selectionController.isSelected(nodeName);
   SelectionController get selectionController => _selectionController;
 
   /// Coordinate space converter (handles all screen ↔ logical conversions).
   CoordinateSpace get coords => CoordinateSpace(scale: _scale, panOffset: _offset);
-
-  set directoryColor(Color value) {
-    if (_directoryColor != value) {
-      _directoryColor = value;
-      notifyListeners();
-      _saveGlobalConfig();
-    }
-  }
-
-  set fileColor(Color value) {
-    if (_fileColor != value) {
-      _fileColor = value;
-      notifyListeners();
-      _saveGlobalConfig();
-    }
-  }
 
   set invertVerticalScroll(bool value) {
     if (_invertVerticalScroll != value) {
@@ -165,6 +150,15 @@ class DesktopViewModel extends ChangeNotifier {
   set invertHorizontalScroll(bool value) {
     if (_invertHorizontalScroll != value) {
       _invertHorizontalScroll = value;
+      notifyListeners();
+      _saveGlobalConfig();
+    }
+  }
+
+  set isDarkMode(bool value) {
+    final mode = value ? ThemeMode.dark : ThemeMode.light;
+    if (_themeMode != mode) {
+      _themeMode = mode;
       notifyListeners();
       _saveGlobalConfig();
     }
@@ -237,15 +231,9 @@ class DesktopViewModel extends ChangeNotifier {
       _setError("Couldn't read saved settings");
     }
 
-    if (config['directory_color'] != null) {
-      _directoryColor = Color(config['directory_color'] as int);
-    }
-    if (config['file_color'] != null) {
-      _fileColor = Color(config['file_color'] as int);
-    }
-
     _invertVerticalScroll = config['invert_vertical_scroll'] as bool? ?? false;
     _invertHorizontalScroll = config['invert_horizontal_scroll'] as bool? ?? false;
+    _themeMode = (config['theme_mode'] as String?) == 'light' ? ThemeMode.light : ThemeMode.dark;
 
     final lastDir = config['last_visited_directory'] as String?;
     if (lastDir != null && await _repository.directoryExists(lastDir)) {
@@ -269,10 +257,9 @@ class DesktopViewModel extends ChangeNotifier {
     if (!_initialized) return;
     try {
       await _repository.updateConfig((config) {
-        config['directory_color'] = _directoryColor.value;
-        config['file_color'] = _fileColor.value;
         config['invert_vertical_scroll'] = _invertVerticalScroll;
         config['invert_horizontal_scroll'] = _invertHorizontalScroll;
+        config['theme_mode'] = _themeMode == ThemeMode.light ? 'light' : 'dark';
         return config;
       });
     } catch (e) {
@@ -396,8 +383,6 @@ class DesktopViewModel extends ChangeNotifier {
       final entities = await _repository.listEntities(path);
 
       final usedPositions = <Offset>{};
-      double nextX = 0;
-      double nextY = 0;
 
       final List<DesktopNode> loadedNodes = [];
       final List<DesktopEntity> unpositionedEntities = [];

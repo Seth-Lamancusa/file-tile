@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/stitch_colors.dart';
+
 class BreadcrumbSegment extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
@@ -23,6 +25,7 @@ class _BreadcrumbSegmentState extends State<BreadcrumbSegment> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).extension<StitchColors>()!;
     final shouldHighlight = widget.isDragTarget || _isHovered;
 
     return InkWell(
@@ -42,7 +45,7 @@ class _BreadcrumbSegmentState extends State<BreadcrumbSegment> {
             Container(
               decoration: shouldHighlight
                 ? BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.1),
+                    color: colors.overlayHover,
                     borderRadius: BorderRadius.circular(4),
                   )
                 : null,
@@ -51,18 +54,18 @@ class _BreadcrumbSegmentState extends State<BreadcrumbSegment> {
                 widget.label,
                 style: TextStyle(
                   fontSize: 14,
-                  color: widget.isLast ? Colors.white : Colors.grey,
+                  color: widget.isLast ? colors.textPrimary : colors.textDim,
                   fontWeight: widget.isLast ? FontWeight.bold : FontWeight.normal,
                 ),
               ),
             ),
             if (!widget.isLast)
-              const Padding(
-                padding: EdgeInsets.only(left: 4.0),
+              Padding(
+                padding: const EdgeInsets.only(left: 4.0),
                 child: Icon(
                   Icons.chevron_right,
                   size: 16,
-                  color: Colors.grey,
+                  color: colors.textDim,
                 ),
               ),
           ],

@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stitch_desktop_grid/src/controllers/click_handler.dart';
 import 'package:stitch_desktop_grid/src/controllers/selection_controller.dart';
@@ -163,8 +162,9 @@ void main() {
       );
       expect(result, isA<NodeClickResult>());
       expect((result as NodeClickResult).nodeId, 'node1');
-      // Secondary click should not dispatch selection actions
-      expect(selectionController.selected, isEmpty);
+      // Right-clicking a node selects it (single-select) so the context menu
+      // acts on the clicked node.
+      expect(selectionController.selected, {'node1'});
     });
 
     test('secondary click on background returns BackgroundClickResult', () {

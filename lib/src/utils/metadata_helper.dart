@@ -26,7 +26,7 @@ class MetadataManager extends JsonFileManager {
       throw FormatException('Metadata root must be a JSON object');
     }
 
-    final data = (decoded as Map).cast<String, dynamic>();
+    final data = decoded.cast<String, dynamic>();
     final layout = data['layout'];
     if (layout != null && layout is! Map) {
       throw FormatException('layout must be an object');
@@ -38,7 +38,7 @@ class MetadataManager extends JsonFileManager {
         throw FormatException('newElementPlacementConfig must be an object');
       }
       try {
-        NewElementPlacementConfig.fromJson((config as Map).cast<String, dynamic>());
+        NewElementPlacementConfig.fromJson(config.cast<String, dynamic>());
       } on ArgumentError catch (e) {
         throw FormatException('Invalid newElementPlacementConfig: ${e.message}');
       }

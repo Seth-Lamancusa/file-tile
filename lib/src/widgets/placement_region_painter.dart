@@ -18,16 +18,6 @@ class PlacementRegionPainter extends CustomPainter {
     const gridSize = GridConfig.gridCellSize;
     const regionColor = Color(0xFF2A7EDF); // Blue
     const baseOpacity = 0.15; // Much more transparent
-    const textOpacity = 0.3;
-    const textColor = Color(0xFFFFFFFF); // White
-
-    // Convert grid anchor to logical pixels (using 1-based indexing for positive)
-    final anchorLogicalX = config.anchorCol > 0
-        ? (config.anchorCol - 1) * gridSize
-        : config.anchorCol * gridSize;
-    final anchorLogicalY = config.anchorRow > 0
-        ? (config.anchorRow - 1) * gridSize
-        : config.anchorRow * gridSize;
 
     final isConstrainedHorizontal = config.isConstrainedAxisColumns;
     const fadeOutCells = 5;
@@ -47,7 +37,7 @@ class PlacementRegionPainter extends CustomPainter {
 
         final cellSize = coords.renderedGridCellSize;
         final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-        canvas.drawRect(rect, Paint()..color = regionColor.withOpacity(baseOpacity));
+        canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: baseOpacity));
       }
 
       // Draw unconstrained direction cells (vertical with fade)
@@ -70,7 +60,7 @@ class PlacementRegionPainter extends CustomPainter {
 
           final cellSize = coords.renderedGridCellSize;
           final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-          canvas.drawRect(rect, Paint()..color = regionColor.withOpacity(opacity));
+          canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: opacity));
         }
       }
     } else {
@@ -88,7 +78,7 @@ class PlacementRegionPainter extends CustomPainter {
 
         final cellSize = coords.renderedGridCellSize;
         final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-        canvas.drawRect(rect, Paint()..color = regionColor.withOpacity(baseOpacity));
+        canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: baseOpacity));
       }
 
       // Draw unconstrained direction cells (horizontal with fade)
@@ -111,68 +101,10 @@ class PlacementRegionPainter extends CustomPainter {
 
           final cellSize = coords.renderedGridCellSize;
           final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-          canvas.drawRect(rect, Paint()..color = regionColor.withOpacity(opacity));
+          canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: opacity));
         }
       }
     }
-
-    // Draw text hint
-    // _drawTextHint(canvas, size, isConstrainedHorizontal, anchorLogicalX, anchorLogicalY, gridSize, fadeOutCells, textColor, textOpacity);
-  }
-
-  void _drawTextHint(
-    Canvas canvas,
-    Size size,
-    bool isConstrainedHorizontal,
-    double anchorLogicalX,
-    double anchorLogicalY,
-    double gridSize,
-    int fadeOutCells,
-    Color textColor,
-    double textOpacity,
-  ) {
-    const text = 'New files and folders will populate here.';
-    final textPainter = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          color: textColor.withOpacity(textOpacity),
-          fontSize: 12 * coords.scale,
-          height: 1.2,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    );
-    textPainter.layout();
-
-    // Calculate text position based on unconstrained direction
-    const textPadding = 8.0;
-    late Offset textPos;
-    if (isConstrainedHorizontal) {
-      // Constrained is horizontal, unconstrained is vertical
-      final textX = anchorLogicalX + textPadding;
-      if (config.unconstrainedDirection == 'down') {
-        // Extend downward: place text at top of anchor cell
-        textPos = coords.logicalToScreen(Offset(textX, anchorLogicalY + textPadding));
-      } else {
-        // Extend upward: place text at bottom of anchor cell
-        final textLogicalY = anchorLogicalY + gridSize - textPadding - 20;
-        textPos = coords.logicalToScreen(Offset(textX, textLogicalY));
-      }
-    } else {
-      // Constrained is vertical, unconstrained is horizontal
-      final textY = anchorLogicalY + textPadding;
-      if (config.unconstrainedDirection == 'right') {
-        // Extend rightward: place text at left of anchor cell
-        textPos = coords.logicalToScreen(Offset(anchorLogicalX + textPadding, textY));
-      } else {
-        // Extend leftward: place text at right of anchor cell
-        final textLogicalX = anchorLogicalX + gridSize - textPadding;
-        textPos = coords.logicalToScreen(Offset(textLogicalX, textY));
-      }
-    }
-
-    textPainter.paint(canvas, textPos);
   }
 
   @override

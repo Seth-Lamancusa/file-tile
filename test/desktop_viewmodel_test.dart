@@ -51,7 +51,9 @@ void main() {
       expect(subNode.isDirectory, true);
 
       final unpositioned = vm.nodes.where((n) => n.name != 'b.txt').map((n) => n.position).toSet();
-      expect(unpositioned, {const Offset(0, 0), const Offset(80, 0)});
+      // Default NewElementPlacementConfig anchors new items at grid (col 2, row -2),
+      // growing rightward, so the first two auto-placed positions are (80,-160) and (160,-160).
+      expect(unpositioned, {const Offset(80, -160), const Offset(160, -160)});
     });
   });
 
@@ -225,8 +227,12 @@ void main() {
       final layout = await repo.readLayout(newFolder);
       expect(layout.containsKey('file1.txt'), true);
       expect(layout.containsKey('file2.txt'), true);
-      expect(layout['file1.txt']['x'], 0.0);
-      expect(layout['file2.txt']['x'], 80.0);
+      // Default NewElementPlacementConfig anchors new items at grid (col 2, row -2),
+      // growing rightward, so the first two auto-placed positions are (80,-160) and (160,-160).
+      expect(layout['file1.txt']['x'], 80.0);
+      expect(layout['file1.txt']['y'], -160.0);
+      expect(layout['file2.txt']['x'], 160.0);
+      expect(layout['file2.txt']['y'], -160.0);
     });
   });
 }

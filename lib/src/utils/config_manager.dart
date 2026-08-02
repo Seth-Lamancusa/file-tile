@@ -20,7 +20,7 @@ class ConfigManager extends JsonFileManager {
       throw FormatException('Config root must be a JSON object');
     }
 
-    return (decoded as Map).cast<String, dynamic>();
+    return decoded.cast<String, dynamic>();
   }
 
   @override
