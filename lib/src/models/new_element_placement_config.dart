@@ -78,11 +78,11 @@ class NewElementPlacementConfig {
 
   factory NewElementPlacementConfig.defaultConfig() {
     return NewElementPlacementConfig(
-      anchorCol: 2,
-      anchorRow: -2,
+      anchorCol: 1,
+      anchorRow: 1,
       constrainedCount: 5,
       constrainedDirection: 'right',
-      unconstrainedDirection: 'up',
+      unconstrainedDirection: 'down',
     );
   }
 }

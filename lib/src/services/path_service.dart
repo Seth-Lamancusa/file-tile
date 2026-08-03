@@ -19,9 +19,12 @@ class PathService {
     return _baseDir;
   }
 
+  /// Name of the local config file, as it appears on disk.
+  static const String configFileName = 'stitch-grid-config.json';
+
   /// Path to the local config file (stitch-grid-config.json)
   static String get localConfigPath {
-    return '${baseDir}/stitch-grid-config.json';
+    return '${baseDir}/${configFileName}';
   }
 
   /// Ensure the base directory exists.
