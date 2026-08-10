@@ -105,6 +105,11 @@ class FakeDesktopRepository implements DesktopRepository {
   }
 
   @override
+  Future<void> ensureLayoutFileExists(String path) async {
+    _layouts.putIfAbsent(path, () => {});
+  }
+
+  @override
   Future<Map<String, dynamic>> readLayout(String path) async {
     return Map<String, dynamic>.from(_layouts[path] ?? {});
   }
@@ -112,6 +117,19 @@ class FakeDesktopRepository implements DesktopRepository {
   @override
   Future<void> updateLayout(String path, Map<String, dynamic> layout) async {
     _layouts[path] = Map<String, dynamic>.from(layout);
+  }
+
+  @override
+  Future<void> removeFromLayout(String path, String name) async {
+    _layouts[path]?.remove(name);
+  }
+
+  @override
+  Future<void> renameInLayout(String path, String oldName, String newName) async {
+    final layout = _layouts[path];
+    if (layout != null && layout.containsKey(oldName)) {
+      layout[newName] = layout.remove(oldName);
+    }
   }
 
   @override

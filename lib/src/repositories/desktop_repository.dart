@@ -49,12 +49,23 @@ abstract class DesktopRepository {
     Map<String, dynamic> Function(Map<String, dynamic>) updateFn,
   );
 
+  /// Creates the metadata file for [path] with default content if it doesn't
+  /// already exist. Never overwrites existing content.
+  Future<void> ensureLayoutFileExists(String path);
+
   /// Read the saved node layout (position/color per entry name) for the
   /// directory at [path]. Returns an empty map if none exists yet.
   Future<Map<String, dynamic>> readLayout(String path);
 
   /// Overwrite the saved node layout for the directory at [path].
   Future<void> updateLayout(String path, Map<String, dynamic> layout);
+
+  /// Atomically remove [name]'s entry from the saved layout for [path].
+  Future<void> removeFromLayout(String path, String name);
+
+  /// Atomically rename [oldName]'s entry to [newName] in the saved layout
+  /// for [path], if present.
+  Future<void> renameInLayout(String path, String oldName, String newName);
 
   /// Read the new element placement configuration for the directory at [path].
   /// Returns the default configuration if none exists yet.

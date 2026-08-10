@@ -8,6 +8,7 @@ import '../repositories/desktop_repository.dart';
 import '../repositories/file_system_desktop_repository.dart';
 import '../utils/coordinate_space.dart';
 import '../utils/grid_position.dart';
+import '../utils/metadata_helper.dart';
 
 /// Actions that can be performed on selected nodes.
 /// This is the single source of truth for select actions in the desktop view.
@@ -105,6 +106,24 @@ class DesktopViewModel extends ChangeNotifier {
   // Polling for directory changes
   Timer? _refreshTimer;
   Set<String> _lastPolledEntityNames = {};
+  bool _pollInFlight = false;
+
+  // True while the user is actively dragging a node, panning the canvas, or
+  // drawing a selection box. Polling is suspended for the whole gesture so a
+  // background reload can never clobber in-progress, unsaved UI state.
+  bool _isInteracting = false;
+
+  // Every disk-touching operation (load/create/delete/rename/move/poll) runs
+  // through this chain so at most one is ever in flight. A newer operation
+  // simply awaits the previous one instead of racing it - no request tokens
+  // or cancellation needed.
+  Future<void> _operationChain = Future.value();
+
+  Future<T> _runExclusive<T>(Future<T> Function() operation) {
+    final result = _operationChain.then((_) => operation());
+    _operationChain = result.then((_) {}, onError: (_) {});
+    return result;
+  }
 
   final List<Map<String, String>> _appRegistry = [
     {'name': 'VS Code', 'cmd': 'code', 'icon': 'code'},
@@ -281,8 +300,11 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   Future<void> _pollForChanges() async {
+    if (_isInteracting || _pollInFlight) return;
+    _pollInFlight = true;
     try {
       final entities = await _repository.listEntities(_currentDirectory);
+      if (_isInteracting) return; // an interaction may have started while awaiting above
       final currentNames = entities.map((e) => e.name).toSet();
 
       if (currentNames != _lastPolledEntityNames) {
@@ -291,6 +313,27 @@ class DesktopViewModel extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Error polling for directory changes: $e');
+    } finally {
+      _pollInFlight = false;
+    }
+  }
+
+  /// Call when the user begins a manual interaction (node drag, canvas pan,
+  /// selection box). Suspends polling for the duration so a background
+  /// reload can't clobber unsaved, in-memory changes. Pair with
+  /// [endInteraction].
+  void beginInteraction() {
+    _isInteracting = true;
+    _stopPolling();
+  }
+
+  /// Call when a manual interaction (started with [beginInteraction]) ends,
+  /// however it ends - completed, cancelled, or reverted.
+  void endInteraction() {
+    if (!_isInteracting) return;
+    _isInteracting = false;
+    if (_initialized && !_isLoading) {
+      _startPolling();
     }
   }
 
@@ -330,7 +373,19 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> loadDirectory(String path, {bool addToHistory = true, bool clearForward = true, bool force = false, bool isPolledRefresh = false}) async {
+  /// Loads [path], serialized against every other disk-touching operation
+  /// (polling, create/delete/rename/move) so nothing can race it.
+  Future<void> loadDirectory(String path, {bool addToHistory = true, bool clearForward = true, bool force = false, bool isPolledRefresh = false}) {
+    return _runExclusive(() => _loadDirectoryImpl(
+      path,
+      addToHistory: addToHistory,
+      clearForward: clearForward,
+      force: force,
+      isPolledRefresh: isPolledRefresh,
+    ));
+  }
+
+  Future<void> _loadDirectoryImpl(String path, {bool addToHistory = true, bool clearForward = true, bool force = false, bool isPolledRefresh = false}) async {
     if (!force && path == _currentDirectory && _nodes.isNotEmpty) return;
 
     if (_initialized) {
@@ -369,15 +424,24 @@ class DesktopViewModel extends ChangeNotifier {
 
       Map<String, dynamic> layout = {};
       try {
-        layout = await _repository.readLayout(path);
         // Ensure metadata file exists on first visit, before listing entities,
         // so it appears in the initial render instead of only after renavigating.
-        await _repository.updateLayout(path, layout);
+        // This never overwrites existing content, so it can't clobber a
+        // concurrent save (e.g. from an in-flight drag) with a stale snapshot.
+        await _repository.ensureLayoutFileExists(path);
+        layout = await _repository.readLayout(path);
 
         _newElementPlacementConfig = await _repository.readNewElementPlacementConfig(path);
       } catch (e) {
         debugPrint('Failed to load metadata: $e');
         _setError("Couldn't load saved layout for this folder");
+        if (isPolledRefresh) {
+          // Don't rebuild nodes from a bad read: treating it as "no layout"
+          // would mark every node unpositioned, auto-place them at defaults,
+          // and then persist that wipe over the real on-disk layout. Bail
+          // and keep the current in-memory state; the next poll retries.
+          return;
+        }
       }
 
       final entities = await _repository.listEntities(path);
@@ -435,21 +499,25 @@ class DesktopViewModel extends ChangeNotifier {
       _nodes = List.unmodifiable(loadedNodes);
 
       if (unpositionedEntities.isNotEmpty) {
-        _saveMetadata();
+        await _saveMetadata();
       }
 
-      final config = await _repository.readConfig();
-      final viewStates = (config['desktop_view_states'] as Map?)?.cast<String, dynamic>();
-      if (viewStates != null && viewStates.containsKey(path)) {
-        final state = viewStates[path];
-        _scale = state['scale']?.toDouble() ?? 1.0;
-        _offset = Offset(
-          state['offset_x']?.toDouble() ?? 0.0,
-          state['offset_y']?.toDouble() ?? 0.0,
-        );
-      } else {
-        _scale = 1.0;
-        _offset = Offset.zero;
+      // Only restore view state from disk if navigating to a different directory.
+      // During polled refreshes of the same directory, preserve current pan/zoom.
+      if (!isPolledRefresh || path != _currentDirectory) {
+        final config = await _repository.readConfig();
+        final viewStates = (config['desktop_view_states'] as Map?)?.cast<String, dynamic>();
+        if (viewStates != null && viewStates.containsKey(path)) {
+          final state = viewStates[path];
+          _scale = state['scale']?.toDouble() ?? 1.0;
+          _offset = Offset(
+            state['offset_x']?.toDouble() ?? 0.0,
+            state['offset_y']?.toDouble() ?? 0.0,
+          );
+        } else {
+          _scale = 1.0;
+          _offset = Offset.zero;
+        }
       }
 
     } catch (e) {
@@ -489,92 +557,98 @@ class DesktopViewModel extends ChangeNotifier {
     }
   }
 
-  void snapNodeToGrid(String name) {
-    if (_replaceNode(name, (n) => n.copyWith(position: coords.snapToNearestGridCell(n.position)))) {
-      notifyListeners();
-      _saveMetadata();
-    }
+  Future<void> snapNodeToGrid(String name) {
+    return _runExclusive(() async {
+      if (_replaceNode(name, (n) => n.copyWith(position: coords.snapToNearestGridCell(n.position)))) {
+        notifyListeners();
+        await _saveMetadata();
+      }
+    });
   }
 
-  Future<void> updateNodeColor(String name, Color? color) async {
-    if (_replaceNode(name, (n) => n.copyWith(color: color))) {
-      notifyListeners();
-      await _saveMetadata();
-    }
+  Future<void> updateNodeColor(String name, Color? color) {
+    return _runExclusive(() async {
+      if (_replaceNode(name, (n) => n.copyWith(color: color))) {
+        notifyListeners();
+        await _saveMetadata();
+      }
+    });
   }
 
-  Future<void> createFile(String name, {Offset? gridPosition, Offset? originalLogicalPos}) async {
-    final created = await _repository.createFile(p.join(_currentDirectory, name));
-    if (created) {
-      await loadDirectory(_currentDirectory, addToHistory: false, force: true);
-      if (gridPosition != null) {
-        if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
-          await _saveMetadata();
+  Future<void> createFile(String name, {Offset? gridPosition, Offset? originalLogicalPos}) {
+    return _runExclusive(() async {
+      final created = await _repository.createFile(p.join(_currentDirectory, name));
+      if (created) {
+        await _loadDirectoryImpl(_currentDirectory, addToHistory: false, force: true);
+        if (gridPosition != null) {
+          if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
+            await _saveMetadata();
+          }
         }
       }
-    }
+    });
   }
 
-  Future<void> createDirectory(String name, {Offset? gridPosition, Offset? originalLogicalPos}) async {
-    final created = await _repository.createDirectory(p.join(_currentDirectory, name));
-    if (created) {
-      await loadDirectory(_currentDirectory, addToHistory: false, force: true);
-      if (gridPosition != null) {
-        if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
-          await _saveMetadata();
+  Future<void> createDirectory(String name, {Offset? gridPosition, Offset? originalLogicalPos}) {
+    return _runExclusive(() async {
+      final created = await _repository.createDirectory(p.join(_currentDirectory, name));
+      if (created) {
+        await _loadDirectoryImpl(_currentDirectory, addToHistory: false, force: true);
+        if (gridPosition != null) {
+          if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
+            await _saveMetadata();
+          }
         }
       }
-    }
+    });
   }
 
-  Future<void> deleteNode(String name) async {
-    final path = p.join(_currentDirectory, name);
-    try {
-      await _repository.delete(path);
-      debugPrint('Deleted: $path');
-    } catch (e) {
-      debugPrint('Error deleting: $e');
-      _setError("Couldn't delete $name");
-      return;
-    }
-
-    try {
-      final layout = await _repository.readLayout(_currentDirectory);
-      layout.remove(name);
-      await _repository.updateLayout(_currentDirectory, layout);
-      debugPrint('Removed $name from metadata');
-    } catch (e) {
-      debugPrint('Failed to update metadata during delete: $e');
-      _setError("Couldn't update layout after deleting $name");
-    }
-
-    await loadDirectory(_currentDirectory, addToHistory: false, force: true);
-  }
-
-  Future<void> renameNode(String oldName, String newName) async {
-    final oldPath = p.join(_currentDirectory, oldName);
-    final newPath = p.join(_currentDirectory, newName);
-
-    try {
-      await _repository.rename(oldPath, newPath);
-    } catch (e) {
-      debugPrint('Error renaming: $e');
-      _setError("Couldn't rename $oldName");
-      return;
-    }
-
-    try {
-      final layout = await _repository.readLayout(_currentDirectory);
-      if (layout.containsKey(oldName)) {
-        layout[newName] = layout.remove(oldName);
-        await _repository.updateLayout(_currentDirectory, layout);
+  Future<void> deleteNode(String name) {
+    return _runExclusive(() async {
+      final path = p.join(_currentDirectory, name);
+      try {
+        await _repository.delete(path);
+        debugPrint('Deleted: $path');
+      } catch (e) {
+        debugPrint('Error deleting: $e');
+        _setError("Couldn't delete $name");
+        return;
       }
-    } catch (e) {
-      debugPrint('Failed to update metadata during rename: $e');
-      _setError("Couldn't update layout after renaming $oldName");
-    }
 
-    await loadDirectory(_currentDirectory, addToHistory: false, force: true);
+      try {
+        await _repository.removeFromLayout(_currentDirectory, name);
+        debugPrint('Removed $name from metadata');
+      } catch (e) {
+        debugPrint('Failed to update metadata during delete: $e');
+        _setError("Couldn't update layout after deleting $name");
+      }
+
+      await _loadDirectoryImpl(_currentDirectory, addToHistory: false, force: true);
+    });
+  }
+
+  Future<void> renameNode(String oldName, String newName) {
+    return _runExclusive(() async {
+      final oldPath = p.join(_currentDirectory, oldName);
+      final newPath = p.join(_currentDirectory, newName);
+
+      try {
+        await _repository.rename(oldPath, newPath);
+      } catch (e) {
+        debugPrint('Error renaming: $e');
+        _setError("Couldn't rename $oldName");
+        return;
+      }
+
+      try {
+        await _repository.renameInLayout(_currentDirectory, oldName, newName);
+      } catch (e) {
+        debugPrint('Failed to update metadata during rename: $e');
+        _setError("Couldn't update layout after renaming $oldName");
+      }
+
+      await _loadDirectoryImpl(_currentDirectory, addToHistory: false, force: true);
+    });
   }
 
   Future<void> refresh() async {
@@ -612,6 +686,7 @@ class DesktopViewModel extends ChangeNotifier {
   /// Save the current positions of selected nodes before dragging starts.
   /// Call this from onPanDown to capture pre-drag state.
   void startDrag(Set<String> nodeNames) {
+    beginInteraction();
     _dragStartPositions.clear();
     for (final nodeName in nodeNames) {
       final node = _findNode(nodeName);
@@ -625,6 +700,7 @@ class DesktopViewModel extends ChangeNotifier {
   /// is claimed by a competing recognizer (e.g. it resolves to a plain tap
   /// instead of a drag), so stale start-positions don't linger.
   void cancelDrag() {
+    endInteraction();
     if (_dragStartPositions.isEmpty) return;
     _dragStartPositions.clear();
     notifyListeners();
@@ -639,6 +715,7 @@ class DesktopViewModel extends ChangeNotifier {
     }
     notifyListeners();
     _dragStartPositions.clear();
+    endInteraction();
   }
 
   /// Attempt to move nodes to a directory or snap to grid with collision detection.
@@ -647,101 +724,116 @@ class DesktopViewModel extends ChangeNotifier {
   Future<void> completeOrRevertDrag(
     Set<String> nodeNames, {
     Offset? cursorPosition,
-  }) async {
-    if (nodeNames.isEmpty) return;
-
-    // Check if cursor is over a drop target (directory or breadcrumb)
-    // This will be called from the view with cursor position
-    // For now, we'll implement the snap-with-collision logic
-    // and the move logic will be added after implementing hit-testing
-
-    // Calculate what the snapped positions would be
-    final snappedPositions = <String, Offset>{};
-    for (final nodeName in nodeNames) {
-      final node = _findNode(nodeName);
-      if (node != null) {
-        snappedPositions[nodeName] = coords.snapToNearestGridCell(node.position);
-      }
+  }) {
+    if (nodeNames.isEmpty) {
+      endInteraction();
+      return Future.value();
     }
-
-    // Get occupied positions (all nodes except those being moved)
-    final occupied = getOccupiedPositions(_nodes, excludeNames: nodeNames);
-
-    // Check if snapped positions would cause collisions
-    final snappedOffsets = snappedPositions.values.toList();
-    final canPlace = canPlaceNodes(snappedOffsets, occupied);
-
-    if (canPlace) {
-      // No collision - apply snaps
-      for (final entry in snappedPositions.entries) {
-        _replaceNode(entry.key, (n) => n.copyWith(position: entry.value));
-      }
-    } else {
-      // Collision detected - revert to pre-drag positions
-      for (final nodeName in nodeNames) {
-        if (_dragStartPositions.containsKey(nodeName)) {
-          _replaceNode(nodeName, (n) => n.copyWith(position: _dragStartPositions[nodeName]!));
+    return _runExclusive(() async {
+      try {
+        // Calculate what the snapped positions would be
+        final snappedPositions = <String, Offset>{};
+        for (final nodeName in nodeNames) {
+          final node = _findNode(nodeName);
+          if (node != null) {
+            snappedPositions[nodeName] = coords.snapToNearestGridCell(node.position);
+          }
         }
-      }
-    }
 
-    notifyListeners();
-    _dragStartPositions.clear();
-    await _saveMetadata();
+        // Get occupied positions (all nodes except those being moved)
+        final occupied = getOccupiedPositions(_nodes, excludeNames: nodeNames);
+
+        // Check if snapped positions would cause collisions
+        final snappedOffsets = snappedPositions.values.toList();
+        final canPlace = canPlaceNodes(snappedOffsets, occupied);
+
+        if (canPlace) {
+          // No collision - apply snaps
+          for (final entry in snappedPositions.entries) {
+            _replaceNode(entry.key, (n) => n.copyWith(position: entry.value));
+          }
+        } else {
+          // Collision detected - revert to pre-drag positions
+          for (final nodeName in nodeNames) {
+            if (_dragStartPositions.containsKey(nodeName)) {
+              _replaceNode(nodeName, (n) => n.copyWith(position: _dragStartPositions[nodeName]!));
+            }
+          }
+        }
+
+        notifyListeners();
+        _dragStartPositions.clear();
+        await _saveMetadata();
+      } finally {
+        endInteraction();
+      }
+    });
   }
 
   /// Resolves conflicts when moving nodes by skipping conflicting items.
   /// Call this after a [MoveConflictException] and the user chooses to skip conflicts.
-  Future<void> moveNodesToDirectorySkippingConflicts(Set<String> nodeNames, String targetPath) async {
-    final filteredNodeNames = nodeNames.where((n) => n != 'stitch-grid.json').toSet();
-    if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
+  Future<void> moveNodesToDirectorySkippingConflicts(Set<String> nodeNames, String targetPath) {
+    return _runExclusive(() async {
+      try {
+        final filteredNodeNames = nodeNames.where((n) => n != MetadataManager.fileName).toSet();
+        if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
 
-    try {
-      final targetLayout = await _repository.readLayout(targetPath);
-      // Filter to only non-conflicting names
-      final nonConflicting = filteredNodeNames.where((name) => !targetLayout.containsKey(name)).toSet();
+        try {
+          final targetLayout = await _repository.readLayout(targetPath);
+          // Filter to only non-conflicting names
+          final nonConflicting = filteredNodeNames.where((name) => !targetLayout.containsKey(name)).toSet();
 
-      if (nonConflicting.isEmpty) {
-        debugPrint('All items have conflicts, skipping move');
-        return;
+          if (nonConflicting.isEmpty) {
+            debugPrint('All items have conflicts, skipping move');
+            return;
+          }
+
+          // Move only the non-conflicting items
+          await _performMove(nonConflicting, targetPath);
+        } catch (e) {
+          debugPrint('Error moving non-conflicting items: $e');
+          _setError("Couldn't move some items to that directory");
+        }
+      } finally {
+        endInteraction();
       }
-
-      // Move only the non-conflicting items
-      await _performMove(nonConflicting, targetPath);
-    } catch (e) {
-      debugPrint('Error moving non-conflicting items: $e');
-      _setError("Couldn't move some items to that directory");
-    }
+    });
   }
 
   /// Move a set of nodes to a target directory and auto-place them.
   /// Uses the same column-wrapping auto-placement logic.
   /// Does not navigate to the target directory.
   /// Throws [MoveConflictException] if naming conflicts are detected.
-  Future<void> moveNodesToDirectory(Set<String> nodeNames, String targetPath) async {
-    // Filter out the metadata file (can't move stitch-grid.json)
-    final filteredNodeNames = nodeNames.where((n) => n != 'stitch-grid.json').toSet();
+  Future<void> moveNodesToDirectory(Set<String> nodeNames, String targetPath) {
+    return _runExclusive(() async {
+      try {
+        // Filter out the metadata file (can't move stitch-grid.json)
+        final filteredNodeNames = nodeNames.where((n) => n != MetadataManager.fileName).toSet();
 
-    if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
+        if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;
 
-    // Check for conflicts before attempting move
-    try {
-      final targetLayout = await _repository.readLayout(targetPath);
-      final conflicts = filteredNodeNames.where((name) => targetLayout.containsKey(name)).toList();
-      if (conflicts.isNotEmpty) {
-        throw MoveConflictException(conflictingNames: conflicts, targetPath: targetPath);
+        // Check for conflicts before attempting move
+        try {
+          final targetLayout = await _repository.readLayout(targetPath);
+          final conflicts = filteredNodeNames.where((name) => targetLayout.containsKey(name)).toList();
+          if (conflicts.isNotEmpty) {
+            throw MoveConflictException(conflictingNames: conflicts, targetPath: targetPath);
+          }
+        } catch (e) {
+          if (e is MoveConflictException) rethrow;
+          debugPrint('Error checking for conflicts: $e');
+        }
+
+        try {
+          await _performMove(filteredNodeNames, targetPath);
+        } catch (e) {
+          debugPrint('Error moving nodes to directory: $e');
+          _setError("Couldn't move items to that directory");
+        }
+      } finally {
+        endInteraction();
       }
-    } catch (e) {
-      if (e is MoveConflictException) rethrow;
-      debugPrint('Error checking for conflicts: $e');
-    }
-
-    try {
-      await _performMove(filteredNodeNames, targetPath);
-    } catch (e) {
-      debugPrint('Error moving nodes to directory: $e');
-      _setError("Couldn't move items to that directory");
-    }
+    });
   }
 
   Future<void> _performMove(Set<String> nodeNames, String targetPath) async {
@@ -810,7 +902,7 @@ class DesktopViewModel extends ChangeNotifier {
       }
 
       // Reload source directory (stays in current view)
-      await loadDirectory(_currentDirectory, addToHistory: false, force: true);
+      await _loadDirectoryImpl(_currentDirectory, addToHistory: false, force: true);
     } catch (e) {
       rethrow;
     }
@@ -886,6 +978,16 @@ class DesktopViewModel extends ChangeNotifier {
     super.dispose();
   }
 
+  int _getGridIndexSkippingZero(int anchor, int offset, bool goingPositive) {
+    final result = anchor + (goingPositive ? offset : -offset);
+    if (goingPositive && anchor < 0 && result >= 0) {
+      return result + 1;
+    } else if (!goingPositive && anchor > 0 && result <= 0) {
+      return result - 1;
+    }
+    return result == 0 ? (goingPositive ? 1 : -1) : result;
+  }
+
   Offset _findNextPositionUsingConfig(
     NewElementPlacementConfig config,
     Set<Offset> usedPositions,
@@ -904,20 +1006,28 @@ class DesktopViewModel extends ChangeNotifier {
 
       if (isConstrainedHorizontal) {
         // Constrained direction is horizontal (left/right)
-        gridCol = config.constrainedDirection == 'right'
-            ? config.anchorCol + constrainedIndex
-            : config.anchorCol - constrainedIndex;
-        gridRow = config.unconstrainedDirection == 'down'
-            ? config.anchorRow + unconstrainedIndex
-            : config.anchorRow - unconstrainedIndex;
+        gridCol = _getGridIndexSkippingZero(
+          config.anchorCol,
+          constrainedIndex,
+          config.constrainedDirection == 'right',
+        );
+        gridRow = _getGridIndexSkippingZero(
+          config.anchorRow,
+          unconstrainedIndex,
+          config.unconstrainedDirection == 'down',
+        );
       } else {
         // Constrained direction is vertical (up/down)
-        gridRow = config.constrainedDirection == 'down'
-            ? config.anchorRow + constrainedIndex
-            : config.anchorRow - constrainedIndex;
-        gridCol = config.unconstrainedDirection == 'right'
-            ? config.anchorCol + unconstrainedIndex
-            : config.anchorCol - unconstrainedIndex;
+        gridRow = _getGridIndexSkippingZero(
+          config.anchorRow,
+          constrainedIndex,
+          config.constrainedDirection == 'down',
+        );
+        gridCol = _getGridIndexSkippingZero(
+          config.anchorCol,
+          unconstrainedIndex,
+          config.unconstrainedDirection == 'right',
+        );
       }
 
       // Convert grid indices to logical pixels (1-based for positive)

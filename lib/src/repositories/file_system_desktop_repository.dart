@@ -7,6 +7,17 @@ import '../utils/metadata_helper.dart';
 import '../utils/trash_helper.dart';
 import 'desktop_repository.dart';
 
+/// Names that are Stitch-internal bookkeeping files rather than user content,
+/// and must never show up as grid nodes.
+const Set<String> _internalFileNames = {
+  PathService.configFileName,
+  MetadataManager.fileName,
+};
+
+bool _isInternalEntity(String name) {
+  return _internalFileNames.contains(name) || name.endsWith('.tmp');
+}
+
 /// [DesktopRepository] implementation backed by the real filesystem.
 ///
 /// Mostly wraps the existing `PathService`/`ConfigManager`/`MetadataManager`
@@ -34,7 +45,9 @@ class FileSystemDesktopRepository implements DesktopRepository {
   @override
   Future<List<DesktopEntity>> listEntities(String path) async {
     final entities = await Directory(path).list(followLinks: false).toList();
-    return entities.map((e) {
+    return entities
+        .where((e) => !_isInternalEntity(p.basename(e.path)))
+        .map((e) {
       bool isDir = e is Directory;
       bool isSymlink = e is Link;
 
@@ -107,6 +120,11 @@ class FileSystemDesktopRepository implements DesktopRepository {
   }
 
   @override
+  Future<void> ensureLayoutFileExists(String path) async {
+    await MetadataManager(path).ensureExists();
+  }
+
+  @override
   Future<Map<String, dynamic>> readLayout(String path) async {
     final manager = MetadataManager(path);
     await manager.load();
@@ -115,9 +133,17 @@ class FileSystemDesktopRepository implements DesktopRepository {
 
   @override
   Future<void> updateLayout(String path, Map<String, dynamic> layout) async {
-    final manager = MetadataManager(path);
-    await manager.load();
-    await manager.updateLayout(layout);
+    await MetadataManager(path).updateLayout(layout);
+  }
+
+  @override
+  Future<void> removeFromLayout(String path, String name) async {
+    await MetadataManager(path).removeNode(name);
+  }
+
+  @override
+  Future<void> renameInLayout(String path, String oldName, String newName) async {
+    await MetadataManager(path).renameNode(oldName, newName);
   }
 
   @override

@@ -32,6 +32,14 @@ The grid stores two types of configuration:
 - **Auto-Layout**: New items automatically position in first 5 columns
 - **Snap Resolution**: Items snap to 80px increments
 
+### Coordinate System
+
+The grid uses **1-based indexing with no zero**:
+- Grid cells are indexed: `..., -2, -1, 1, 2, 3, ...` (0 is skipped)
+- Grid cell 1 occupies logical pixels 0–80
+- Grid cell -1 occupies logical pixels -80 to 0
+- When calculating positions or placement regions, any result of 0 must be adjusted to 1 (moving positive) or -1 (moving negative)
+
 ### Available Apps
 
 The "Open With" menu supports:
@@ -69,6 +77,11 @@ lib/
 
 ### Notes
 
+**Operation Serialization**
+All disk-touching operations (load, create, delete, rename, move, and polling) are serialized via a single operation queue (`_operationChain` in `DesktopViewModel`). This prevents races where a stale operation could finish late and clobber a newer one. Avoid wrapping operations in nested `_runExclusive` calls — if you're already inside one, call the `_impl` variant directly instead.
+
+**Polling Suspension During Interaction**
+Polling is suspended during drags, pans, and selection-box gestures via `beginInteraction()`/`endInteraction()`. This prevents a background reload from clobbering unsaved, in-memory UI state like a node position mid-drag. If you add a new user gesture, wrap it with these calls in the view's event handler.
 
 **Dialog & Menu Sizing**
 To properly control width on an `AlertDialog`:

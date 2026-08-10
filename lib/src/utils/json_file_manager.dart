@@ -33,7 +33,19 @@ abstract class JsonFileManager {
   Map<String, dynamic> validateAndLoad(String jsonString);
 
   /// Load data from file with validation. Returns the loaded/default data.
+  /// Shares the same per-file lock as [save]/[updateAtomic], so a read can
+  /// never observe a write that's only partially applied.
   Future<Map<String, dynamic>> loadData() async {
+    final lock = _getLock(file.path);
+    await lock.acquire();
+    try {
+      return await _loadUnlocked();
+    } finally {
+      lock.release();
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadUnlocked() async {
     if (!await file.exists()) {
       return getDefaultData();
     }
@@ -71,7 +83,7 @@ abstract class JsonFileManager {
     final lock = _getLock(file.path);
     await lock.acquire();
     try {
-      final current = await loadData();
+      final current = await _loadUnlocked();
       final updated = updateFn(current);
       await _writeLocked(updated);
       return updated;
@@ -80,18 +92,37 @@ abstract class JsonFileManager {
     }
   }
 
+  /// Writes via a temp file + rename so a reader (even one bypassing the
+  /// lock, e.g. an external process) never observes a partially-written file.
   Future<void> _writeLocked(Map<String, dynamic> data) async {
     try {
       validateAndLoad(json.encode(data));
       await file.parent.create(recursive: true);
       final existedBefore = await file.exists();
-      await file.writeAsString(json.encode(data));
+      final tmpFile = File('${file.path}.tmp');
+      await tmpFile.writeAsString(json.encode(data));
+      await tmpFile.rename(file.path);
       if (!existedBefore) {
         debugPrint('[JsonFileManager] created ${file.path}');
       }
     } catch (e) {
       debugPrint('Error saving ${file.path}: $e');
       rethrow;
+    }
+  }
+
+  /// Creates the file with default data if it doesn't already exist on disk.
+  /// Never touches existing content, so it's safe to call alongside
+  /// concurrent readers/writers without clobbering their changes.
+  Future<void> ensureExists() async {
+    final lock = _getLock(file.path);
+    await lock.acquire();
+    try {
+      if (!await file.exists()) {
+        await _writeLocked(getDefaultData());
+      }
+    } finally {
+      lock.release();
     }
   }
 

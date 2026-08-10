@@ -5,10 +5,13 @@ import 'json_file_manager.dart';
 import '../models/new_element_placement_config.dart';
 
 class MetadataManager extends JsonFileManager {
+  /// Name of the per-directory metadata file, as it appears on disk.
+  static const String fileName = 'stitch-grid.json';
+
   late Map<String, dynamic> _data;
 
   MetadataManager(String directoryPath)
-      : super(File(p.join(directoryPath, 'stitch-grid.json')));
+      : super(File(p.join(directoryPath, fileName)));
 
   @override
   Map<String, dynamic> validateAndLoad(String jsonString) {
@@ -69,24 +72,36 @@ class MetadataManager extends JsonFileManager {
   }
 
   Future<void> updateLayout(Map<String, dynamic> newLayout) async {
-    _data['layout'] = newLayout;
-    await save(_data);
+    _data = await updateAtomic((current) {
+      current['layout'] = newLayout;
+      return current;
+    });
   }
 
   Future<void> updateNewElementPlacementConfig(NewElementPlacementConfig config) async {
-    _data['newElementPlacementConfig'] = config.toJson();
-    await save(_data);
+    _data = await updateAtomic((current) {
+      current['newElementPlacementConfig'] = config.toJson();
+      return current;
+    });
   }
 
   Future<void> removeNode(String nodeName) async {
-    layout.remove(nodeName);
-    await save(_data);
+    _data = await updateAtomic((current) {
+      final layout = Map<String, dynamic>.from((current['layout'] as Map?) ?? {});
+      layout.remove(nodeName);
+      current['layout'] = layout;
+      return current;
+    });
   }
 
   Future<void> renameNode(String oldName, String newName) async {
-    if (layout.containsKey(oldName)) {
-      layout[newName] = layout.remove(oldName);
-      await save(_data);
-    }
+    _data = await updateAtomic((current) {
+      final layout = Map<String, dynamic>.from((current['layout'] as Map?) ?? {});
+      if (layout.containsKey(oldName)) {
+        layout[newName] = layout.remove(oldName);
+      }
+      current['layout'] = layout;
+      return current;
+    });
   }
 }

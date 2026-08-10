@@ -41,13 +41,22 @@ class PlacementRegionPainter extends CustomPainter {
       }
 
       // Draw unconstrained direction cells (vertical with fade)
-      for (int i = 1; i <= fadeOutCells; i++) {
-        final row = config.unconstrainedDirection == 'down'
-            ? config.anchorRow + i
-            : config.anchorRow - i;
+      // Build a sequence of valid grid indices (skipping 0)
+      final fadeRows = <int>[];
+      int row = config.anchorRow;
+      for (int i = 0; i < fadeOutCells; i++) {
+        // Move to next valid grid index
+        if (config.unconstrainedDirection == 'down') {
+          row = row < 0 ? (row + 1 == 0 ? 1 : row + 1) : row + 1;
+        } else {
+          row = row > 0 ? (row - 1 == 0 ? -1 : row - 1) : row - 1;
+        }
+        fadeRows.add(row);
+      }
 
-        // Fade out as we go further from anchor
-        final opacity = (1.0 - (i / (fadeOutCells + 1))) * baseOpacity;
+      for (int i = 0; i < fadeRows.length; i++) {
+        final row = fadeRows[i];
+        final opacity = (1.0 - ((i + 1) / (fadeOutCells + 1))) * baseOpacity;
 
         for (int j = 0; j < config.constrainedCount; j++) {
           final col = config.constrainedDirection == 'right'
@@ -82,13 +91,22 @@ class PlacementRegionPainter extends CustomPainter {
       }
 
       // Draw unconstrained direction cells (horizontal with fade)
-      for (int i = 1; i <= fadeOutCells; i++) {
-        final col = config.unconstrainedDirection == 'right'
-            ? config.anchorCol + i
-            : config.anchorCol - i;
+      // Build a sequence of valid grid indices (skipping 0)
+      final fadeCols = <int>[];
+      int col = config.anchorCol;
+      for (int i = 0; i < fadeOutCells; i++) {
+        // Move to next valid grid index
+        if (config.unconstrainedDirection == 'right') {
+          col = col < 0 ? (col + 1 == 0 ? 1 : col + 1) : col + 1;
+        } else {
+          col = col > 0 ? (col - 1 == 0 ? -1 : col - 1) : col - 1;
+        }
+        fadeCols.add(col);
+      }
 
-        // Fade out as we go further from anchor
-        final opacity = (1.0 - (i / (fadeOutCells + 1))) * baseOpacity;
+      for (int i = 0; i < fadeCols.length; i++) {
+        final col = fadeCols[i];
+        final opacity = (1.0 - ((i + 1) / (fadeOutCells + 1))) * baseOpacity;
 
         for (int j = 0; j < config.constrainedCount; j++) {
           final row = config.constrainedDirection == 'down'

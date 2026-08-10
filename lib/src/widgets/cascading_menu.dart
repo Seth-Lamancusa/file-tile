@@ -192,6 +192,7 @@ class _MenuPanelState extends State<_MenuPanel> {
   OverlayEntry? _submenuOverlay;
   Timer? _hideSubmenuTimer;
   bool _submenuHovered = false;
+  final List<GlobalKey> _itemKeys = [];
 
   @override
   void dispose() {
@@ -268,6 +269,10 @@ class _MenuPanelState extends State<_MenuPanel> {
     final colors = Theme.of(context).extension<StitchColors>()!;
     final backgroundColor = widget.backgroundColor ?? colors.surface;
 
+    while (_itemKeys.length < widget.items.length) {
+      _itemKeys.add(GlobalKey());
+    }
+
     return Material(
       color: Colors.transparent,
       child: IntrinsicWidth(
@@ -291,7 +296,7 @@ class _MenuPanelState extends State<_MenuPanel> {
                 );
               }
 
-              final itemKey = GlobalKey();
+              final itemKey = _itemKeys[index];
               final isHovered = _hoveredIndex == index;
               final hasChildren = item.children != null && item.children!.isNotEmpty;
 
@@ -315,7 +320,7 @@ class _MenuPanelState extends State<_MenuPanel> {
                     _hideSubmenuImmediately();
                   }
                   Future.microtask(() {
-                    if (mounted) {
+                    if (mounted && _hoveredIndex == index) {
                       setState(() => _hoveredIndex = null);
                     }
                   });

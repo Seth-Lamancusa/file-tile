@@ -310,8 +310,26 @@ class _DesktopViewState extends State<DesktopView> {
                 final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
                 final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
 
-                if (isCtrlPressed) {
-                  // Ctrl + scroll = zoom
+                if (isShiftPressed) {
+                  // Shift + scroll = vertical pan
+                  final delta = viewModel.invertVerticalScroll
+                    ? -pointerSignal.scrollDelta.dy
+                    : pointerSignal.scrollDelta.dy;
+                  viewModel.offset = viewModel.offset + Offset(0, delta);
+                } else if (isCtrlPressed) {
+                  // Ctrl + scroll = horizontal pan
+                  final delta = viewModel.invertHorizontalScroll
+                    ? -pointerSignal.scrollDelta.dy
+                    : pointerSignal.scrollDelta.dy;
+                  viewModel.offset = viewModel.offset + Offset(delta, 0);
+                } else {
+                  // Default = zoom (relative to cursor)
+                  // Adjust cursor position from global to canvas coordinates
+                  final cursorScreenPos = pointerSignal.position - Offset(0, AppConfig.appBarHeight);
+
+                  // Get the logical position under the cursor before zoom
+                  final logicalUnderCursor = viewModel.coords.screenToLogical(cursorScreenPos);
+
                   double zoomFactor = 1.1;
                   double newScale = viewModel.scale;
                   if (pointerSignal.scrollDelta.dy > 0) {
@@ -319,19 +337,13 @@ class _DesktopViewState extends State<DesktopView> {
                   } else {
                     newScale *= zoomFactor;
                   }
-                  viewModel.scale = newScale.clamp(0.1, 10.0);
-                } else if (isShiftPressed) {
-                  // Shift + scroll = horizontal pan
-                  final delta = viewModel.invertHorizontalScroll
-                    ? -pointerSignal.scrollDelta.dy
-                    : pointerSignal.scrollDelta.dy;
-                  viewModel.offset = viewModel.offset + Offset(delta, 0);
-                } else {
-                  // Default = vertical pan
-                  final delta = viewModel.invertVerticalScroll
-                    ? -pointerSignal.scrollDelta.dy
-                    : pointerSignal.scrollDelta.dy;
-                  viewModel.offset = viewModel.offset + Offset(0, delta);
+                  newScale = newScale.clamp(0.1, 10.0);
+
+                  // Calculate new offset to keep the logical point under the cursor
+                  final newOffset = cursorScreenPos - (logicalUnderCursor * newScale);
+
+                  viewModel.scale = newScale;
+                  viewModel.offset = newOffset;
                 }
               }
             },
@@ -341,6 +353,10 @@ class _DesktopViewState extends State<DesktopView> {
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onPanDown: (details) {
+                      // Covers both canvas panning and the selection box below -
+                      // either way, suspend polling for the whole gesture so a
+                      // background reload can't fight with it.
+                      viewModel.beginInteraction();
                       if (HardwareKeyboard.instance.isShiftPressed) {
                         setState(() {
                           _selectionBoxStart = details.localPosition;
@@ -358,6 +374,7 @@ class _DesktopViewState extends State<DesktopView> {
                       }
                     },
                     onPanCancel: () {
+                      viewModel.endInteraction();
                       if (_selectionBoxStart != null) {
                         setState(() {
                           _selectionBoxStart = null;
@@ -366,6 +383,7 @@ class _DesktopViewState extends State<DesktopView> {
                       }
                     },
                     onPanEnd: (details) {
+                      viewModel.endInteraction();
                       if (_selectionBoxStart != null && _selectionBoxEnd != null) {
                         final selectedNodeIds = _getNodesInSelectionBox(_selectionBoxStart!, _selectionBoxEnd!);
                         if (selectedNodeIds.isNotEmpty) {
@@ -577,7 +595,7 @@ class _DesktopViewState extends State<DesktopView> {
                       },
                       onDoubleTap: node.isDirectory
                         ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
-                        : null,
+                        : () => viewModel.openSystemDefault(node.name),
                       child: _DesktopNodeWidget(
                         node: node,
                         scale: viewModel.scale,
@@ -1148,13 +1166,14 @@ class _DesktopViewState extends State<DesktopView> {
                               _buildControlRow(colors, 'Right Click', 'Open context menu'),
                               _buildControlRow(colors, 'Delete', 'Delete selected nodes'),
                               _buildControlRow(colors, 'Double-Click Folder', 'Open folder'),
+                              _buildControlRow(colors, 'Double-Click File', 'Open with system default'),
                               const SizedBox(height: 16),
                               // Scroll & Pan Controls
                               Text('Scroll & Pan Controls', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
                               const SizedBox(height: 12),
-                              _buildControlRow(colors, 'Scroll', 'Vertical pan'),
-                              _buildControlRow(colors, 'Shift + Scroll', 'Horizontal pan'),
-                              _buildControlRow(colors, 'Ctrl + Scroll', 'Zoom in/out'),
+                              _buildControlRow(colors, 'Scroll', 'Zoom in/out'),
+                              _buildControlRow(colors, 'Shift + Scroll', 'Vertical pan'),
+                              _buildControlRow(colors, 'Ctrl + Scroll', 'Horizontal pan'),
                               const SizedBox(height: 16),
                               // Scroll Settings
                               Text('Scroll Settings', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
