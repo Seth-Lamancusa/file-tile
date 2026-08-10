@@ -88,11 +88,14 @@ class _DesktopViewState extends State<DesktopView> {
       final leftDist = pos.dx;
       final rightDist = constraints.maxWidth - pos.dx;
 
-      final verticalRamp = (topDist < _autoScrollEdgeZoneMax)
-          ? _calculateRamp(topDist)
-          : ((bottomDist < _autoScrollEdgeZoneMax)
-              ? -_calculateRamp(bottomDist)
-              : 0.0);
+      // Skip vertical scroll if cursor is over the nav bar
+      final verticalRamp = (pos.dy < AppConfig.appBarHeight)
+          ? 0.0
+          : ((topDist < _autoScrollEdgeZoneMax)
+              ? _calculateRamp(topDist)
+              : ((bottomDist < _autoScrollEdgeZoneMax)
+                  ? -_calculateRamp(bottomDist)
+                  : 0.0));
 
       final horizontalRamp = (leftDist < _autoScrollEdgeZoneMax)
           ? _calculateRamp(leftDist)

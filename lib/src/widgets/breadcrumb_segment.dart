@@ -28,48 +28,45 @@ class _BreadcrumbSegmentState extends State<BreadcrumbSegment> {
     final colors = Theme.of(context).extension<FileTileColors>()!;
     final shouldHighlight = widget.isDragTarget || _isHovered;
 
-    return InkWell(
-      onTap: widget.isLast ? null : widget.onTap,
-      borderRadius: BorderRadius.circular(4),
-      onHover: (isHovering) {
-        setState(() => _isHovered = isHovering);
-      },
-      splashColor: shouldHighlight ? Colors.transparent : null,
-      highlightColor: shouldHighlight ? Colors.transparent : null,
-      hoverColor: shouldHighlight ? Colors.transparent : null,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              decoration: shouldHighlight
-                ? BoxDecoration(
-                    color: colors.overlayHover,
-                    borderRadius: BorderRadius.circular(4),
-                  )
-                : null,
-              padding: shouldHighlight ? const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0) : EdgeInsets.zero,
-              child: Text(
-                widget.label,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: widget.isLast ? colors.textPrimary : colors.textDim,
-                  fontWeight: widget.isLast ? FontWeight.bold : FontWeight.normal,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MouseRegion(
+            onEnter: (_) => setState(() => _isHovered = true),
+            onExit: (_) => setState(() => _isHovered = false),
+            child: GestureDetector(
+              onTap: widget.isLast ? null : widget.onTap,
+              child: Container(
+                decoration: shouldHighlight
+                  ? BoxDecoration(
+                      color: colors.overlayHover,
+                      borderRadius: BorderRadius.circular(4),
+                    )
+                  : null,
+                padding: shouldHighlight ? const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0) : EdgeInsets.zero,
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: widget.isLast ? colors.textPrimary : colors.textDim,
+                    fontWeight: widget.isLast ? FontWeight.bold : FontWeight.normal,
+                  ),
                 ),
               ),
             ),
-            if (!widget.isLast)
-              Padding(
-                padding: const EdgeInsets.only(left: 4.0),
-                child: Icon(
-                  Icons.chevron_right,
-                  size: 16,
-                  color: colors.textDim,
-                ),
+          ),
+          if (!widget.isLast)
+            Padding(
+              padding: const EdgeInsets.only(left: 4.0),
+              child: Icon(
+                Icons.chevron_right,
+                size: 16,
+                color: colors.textDim,
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }

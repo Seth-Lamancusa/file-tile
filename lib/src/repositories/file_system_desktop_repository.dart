@@ -7,19 +7,6 @@ import '../utils/metadata_helper.dart';
 import '../utils/trash_helper.dart';
 import 'desktop_repository.dart';
 
-/// Names that are File Tile-internal bookkeeping files rather than user
-/// content, and must never show up as grid nodes. Includes legacy names so
-/// they stay hidden right up until they're migrated on first access.
-const Set<String> _internalFileNames = {
-  PathService.configFileName,
-  PathService.legacyConfigFileName,
-  MetadataManager.fileName,
-  MetadataManager.legacyFileName,
-};
-
-bool _isInternalEntity(String name) {
-  return _internalFileNames.contains(name) || name.endsWith('.tmp');
-}
 
 /// [DesktopRepository] implementation backed by the real filesystem.
 ///
@@ -51,9 +38,7 @@ class FileSystemDesktopRepository implements DesktopRepository {
   @override
   Future<List<DesktopEntity>> listEntities(String path) async {
     final entities = await Directory(path).list(followLinks: false).toList();
-    return entities
-        .where((e) => !_isInternalEntity(p.basename(e.path)))
-        .map((e) {
+    return entities.map((e) {
       bool isDir = e is Directory;
       bool isSymlink = e is Link;
 
