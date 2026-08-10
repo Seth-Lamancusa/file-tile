@@ -1,6 +1,6 @@
-app_id: stitch.grid
-display_name: Stitch Grid
-package_name: stitch-grid
+app_id: file.tile
+display_name: File Tile
+package_name: file-tile
 summary: Desktop GUI
 icon: assets/grid.png
 categories:

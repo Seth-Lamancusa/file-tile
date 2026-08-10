@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../theme/stitch_colors.dart';
+import '../theme/file_tile_colors.dart';
 
 class BreadcrumbSegment extends StatefulWidget {
   final String label;
@@ -25,7 +25,7 @@ class _BreadcrumbSegmentState extends State<BreadcrumbSegment> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
     final shouldHighlight = widget.isDragTarget || _isHovered;
 
     return InkWell(

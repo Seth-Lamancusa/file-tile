@@ -807,7 +807,7 @@ class DesktopViewModel extends ChangeNotifier {
   Future<void> moveNodesToDirectory(Set<String> nodeNames, String targetPath) {
     return _runExclusive(() async {
       try {
-        // Filter out the metadata file (can't move stitch-grid.json)
+        // Filter out the metadata file (can't move file-tile.json)
         final filteredNodeNames = nodeNames.where((n) => n != MetadataManager.fileName).toSet();
 
         if (filteredNodeNames.isEmpty || targetPath == _currentDirectory) return;

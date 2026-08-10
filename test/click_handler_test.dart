@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:stitch_desktop_grid/src/controllers/click_handler.dart';
-import 'package:stitch_desktop_grid/src/controllers/selection_controller.dart';
-import 'package:stitch_desktop_grid/src/models/click_event.dart';
-import 'package:stitch_desktop_grid/src/utils/coordinate_space.dart';
+import 'package:file_tile/src/controllers/click_handler.dart';
+import 'package:file_tile/src/controllers/selection_controller.dart';
+import 'package:file_tile/src/models/click_event.dart';
+import 'package:file_tile/src/utils/coordinate_space.dart';
 
 void main() {
   setUpAll(() {

@@ -1,4 +1,4 @@
-name: stitch_desktop_grid
+name: file_tile
 description: A free-form desktop grid layout widget and app for Flutter. Organize files and folders on an infinite canvas with drag-and-drop, snap-to-grid, zoom, and pan features.
 version: 0.1.0
 publish_to: 'none'

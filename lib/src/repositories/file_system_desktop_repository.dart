@@ -7,11 +7,14 @@ import '../utils/metadata_helper.dart';
 import '../utils/trash_helper.dart';
 import 'desktop_repository.dart';
 
-/// Names that are Stitch-internal bookkeeping files rather than user content,
-/// and must never show up as grid nodes.
+/// Names that are File Tile-internal bookkeeping files rather than user
+/// content, and must never show up as grid nodes. Includes legacy names so
+/// they stay hidden right up until they're migrated on first access.
 const Set<String> _internalFileNames = {
   PathService.configFileName,
+  PathService.legacyConfigFileName,
   MetadataManager.fileName,
+  MetadataManager.legacyFileName,
 };
 
 bool _isInternalEntity(String name) {
@@ -26,7 +29,10 @@ class FileSystemDesktopRepository implements DesktopRepository {
   ConfigManager? _configManager;
 
   ConfigManager _getConfigManager() {
-    return _configManager ??= ConfigManager(File(PathService.localConfigPath));
+    return _configManager ??= ConfigManager(
+      File(PathService.localConfigPath),
+      legacyFile: File(PathService.legacyConfigPath),
+    );
   }
 
   Future<void> _ensureConfigDirExists() async {

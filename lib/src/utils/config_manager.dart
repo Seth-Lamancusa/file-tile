@@ -5,7 +5,7 @@ import 'json_file_manager.dart';
 class ConfigManager extends JsonFileManager {
   late Map<String, dynamic> _data;
 
-  ConfigManager(File configFile) : super(configFile);
+  ConfigManager(File configFile, {File? legacyFile}) : super(configFile, legacyFile: legacyFile);
 
   @override
   Map<String, dynamic> validateAndLoad(String jsonString) {

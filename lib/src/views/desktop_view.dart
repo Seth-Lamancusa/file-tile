@@ -12,7 +12,7 @@ import '../widgets/cascading_menu.dart';
 import '../widgets/placement_region_painter.dart';
 import '../widgets/selection_box_painter.dart';
 import '../utils/coordinate_space.dart';
-import '../theme/stitch_colors.dart';
+import '../theme/file_tile_colors.dart';
 
 export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction, MoveConflictException;
 
@@ -194,7 +194,7 @@ class _DesktopViewState extends State<DesktopView> {
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<DesktopViewModel>();
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
 
     final error = viewModel.lastError;
     if (error != null) {
@@ -933,7 +933,7 @@ class _DesktopViewState extends State<DesktopView> {
   Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory, Offset? gridPosition, Offset? originalLogicalPos}) async {
     final controller = TextEditingController();
     final type = isDirectory ? 'Folder' : 'File';
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
 
     return showDialog(
       context: context,
@@ -987,7 +987,7 @@ class _DesktopViewState extends State<DesktopView> {
     await Future.delayed(const Duration(milliseconds: 100));
     if (!context.mounted) return;
     final controller = TextEditingController(text: node.name);
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
 
     return showDialog(
       context: context,
@@ -1042,7 +1042,7 @@ class _DesktopViewState extends State<DesktopView> {
   }
 
   Future<void> _runScript(BuildContext context, DesktopViewModel viewModel, String tool, String fileName) async {
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Running $fileName with $tool...'),
@@ -1085,7 +1085,7 @@ class _DesktopViewState extends State<DesktopView> {
     final deleteMessage = isMultiple
         ? 'Are you sure you want to delete ${selectedNames.length} items?\n\n${selectedNames.join('\n')}'
         : 'Are you sure you want to delete "${selectedNames.first}"?';
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
 
     return showDialog(
       context: context,
@@ -1118,7 +1118,7 @@ class _DesktopViewState extends State<DesktopView> {
     showDialog(
       context: context,
       builder: (context) {
-        final colors = Theme.of(context).extension<StitchColors>()!;
+        final colors = Theme.of(context).extension<FileTileColors>()!;
         return StatefulBuilder(
           builder: (context, setState) => Dialog(
             child: ConstrainedBox(
@@ -1225,7 +1225,7 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Widget _buildControlRow(StitchColors colors, String control, String description) {
+  Widget _buildControlRow(FileTileColors colors, String control, String description) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: Row(
@@ -1411,7 +1411,7 @@ class _DesktopNodeWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
     final size = gridSize * scale;
     final effectiveColor = node.color ?? (node.isDirectory ? directoryColor : fileColor);
 

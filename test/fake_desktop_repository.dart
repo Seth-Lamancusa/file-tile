@@ -1,6 +1,6 @@
 import 'package:path/path.dart' as p;
-import 'package:stitch_desktop_grid/src/models/new_element_placement_config.dart';
-import 'package:stitch_desktop_grid/src/repositories/desktop_repository.dart';
+import 'package:file_tile/src/models/new_element_placement_config.dart';
+import 'package:file_tile/src/repositories/desktop_repository.dart';
 
 /// In-memory [DesktopRepository] for tests. No real file I/O.
 class FakeDesktopRepository implements DesktopRepository {
