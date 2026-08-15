@@ -33,7 +33,7 @@ Follow-up to the alignment review against [flutter-best-practices.md](flutter/fl
 
 **Plan:**
 - Add a single `String? lastError` field (+ getter) to `DesktopViewModel`, set via a private `_setError(String message)` that also calls `notifyListeners()`.
-- Route every existing catch block through `_setError` instead of (or in addition to) `debugPrint`, using short user-facing messages ("Couldn't delete stitch-grid.json", "Couldn't open with VS Code").
+- Route every existing catch block through `_setError` instead of (or in addition to) `debugPrint`, using short user-facing messages ("Couldn't delete file-tile.json", "Couldn't open with VS Code").
 - In `desktop_view.dart`, wrap the `Scaffold` body in a listener (e.g. compare `lastError` in `didUpdateWidget`/a `ProxyProvider` listener, or simplest: check it at the top of `build` and fire `ScaffoldMessenger.of(context).showSnackBar` once, then have the ViewModel clear `lastError` after reading) — this becomes the app's one error-handling surface, matching the "surface errors clearly" recommendation without introducing a new package.
 - This step depends on (1): once filesystem calls go through `DesktopRepository`, the repository methods can return a `Result`-like type (or throw a typed exception) that the ViewModel translates into a message, rather than parsing raw `dart:io` exceptions.
 

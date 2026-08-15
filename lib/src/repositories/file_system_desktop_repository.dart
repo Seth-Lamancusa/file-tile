@@ -7,16 +7,6 @@ import '../utils/metadata_helper.dart';
 import '../utils/trash_helper.dart';
 import 'desktop_repository.dart';
 
-/// Names that are Stitch-internal bookkeeping files rather than user content,
-/// and must never show up as grid nodes.
-const Set<String> _internalFileNames = {
-  PathService.configFileName,
-  MetadataManager.fileName,
-};
-
-bool _isInternalEntity(String name) {
-  return _internalFileNames.contains(name) || name.endsWith('.tmp');
-}
 
 /// [DesktopRepository] implementation backed by the real filesystem.
 ///
@@ -26,7 +16,10 @@ class FileSystemDesktopRepository implements DesktopRepository {
   ConfigManager? _configManager;
 
   ConfigManager _getConfigManager() {
-    return _configManager ??= ConfigManager(File(PathService.localConfigPath));
+    return _configManager ??= ConfigManager(
+      File(PathService.localConfigPath),
+      legacyFile: File(PathService.legacyConfigPath),
+    );
   }
 
   Future<void> _ensureConfigDirExists() async {
@@ -45,9 +38,7 @@ class FileSystemDesktopRepository implements DesktopRepository {
   @override
   Future<List<DesktopEntity>> listEntities(String path) async {
     final entities = await Directory(path).list(followLinks: false).toList();
-    return entities
-        .where((e) => !_isInternalEntity(p.basename(e.path)))
-        .map((e) {
+    return entities.map((e) {
       bool isDir = e is Directory;
       bool isSymlink = e is Link;
 

@@ -6,12 +6,20 @@ import '../models/new_element_placement_config.dart';
 
 class MetadataManager extends JsonFileManager {
   /// Name of the per-directory metadata file, as it appears on disk.
-  static const String fileName = 'stitch-grid.json';
+  static const String fileName = 'file-tile.json';
+
+  /// Old name of the metadata file, from before the stitch-grid -> file-tile
+  /// rebrand. Renamed to [fileName] in place on first access so existing
+  /// layouts aren't lost.
+  static const String legacyFileName = 'stitch-grid.json';
 
   late Map<String, dynamic> _data;
 
   MetadataManager(String directoryPath)
-      : super(File(p.join(directoryPath, fileName)));
+      : super(
+          File(p.join(directoryPath, fileName)),
+          legacyFile: File(p.join(directoryPath, legacyFileName)),
+        );
 
   @override
   Map<String, dynamic> validateAndLoad(String jsonString) {

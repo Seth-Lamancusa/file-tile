@@ -21,12 +21,28 @@ class _AsyncLock {
 
 abstract class JsonFileManager {
   final File file;
+
+  /// Old-named file this manager's data used to live in, if any. If [file]
+  /// doesn't exist yet but this does, it's renamed to [file]'s path on first
+  /// access so existing users' data/settings carry over under the new name
+  /// instead of silently resetting to defaults.
+  final File? legacyFile;
+
   static final _locks = <String, _AsyncLock>{};
 
-  JsonFileManager(this.file);
+  JsonFileManager(this.file, {this.legacyFile});
 
   static _AsyncLock _getLock(String path) {
     return _locks.putIfAbsent(path, () => _AsyncLock());
+  }
+
+  Future<void> _migrateLegacyIfNeeded() async {
+    final legacy = legacyFile;
+    if (legacy == null) return;
+    if (await file.exists()) return;
+    if (await legacy.exists()) {
+      await legacy.rename(file.path);
+    }
   }
 
   /// Validate and parse JSON string. Override in subclasses for custom validation.
@@ -46,6 +62,7 @@ abstract class JsonFileManager {
   }
 
   Future<Map<String, dynamic>> _loadUnlocked() async {
+    await _migrateLegacyIfNeeded();
     if (!await file.exists()) {
       return getDefaultData();
     }
@@ -118,6 +135,7 @@ abstract class JsonFileManager {
     final lock = _getLock(file.path);
     await lock.acquire();
     try {
+      await _migrateLegacyIfNeeded();
       if (!await file.exists()) {
         await _writeLocked(getDefaultData());
       }

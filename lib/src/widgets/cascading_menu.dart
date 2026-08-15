@@ -4,7 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../theme/stitch_colors.dart';
+import '../theme/file_tile_colors.dart';
 
 typedef MenuItemCallback = void Function();
 typedef BarrierTapCallback = void Function(Offset position);
@@ -266,7 +266,7 @@ class _MenuPanelState extends State<_MenuPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).extension<StitchColors>()!;
+    final colors = Theme.of(context).extension<FileTileColors>()!;
     final backgroundColor = widget.backgroundColor ?? colors.surface;
 
     while (_itemKeys.length < widget.items.length) {

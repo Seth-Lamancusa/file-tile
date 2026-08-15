@@ -1,4 +1,4 @@
-# Stitch Desktop Grid
+# File Tile
 
 ⊞
 
@@ -16,12 +16,12 @@ A free-form desktop grid. Organize files, folders, or other items on an infinite
 
 The grid stores two types of configuration:
 
-1. **Global Config** (`stitch-grid-config.json`)
+1. **Global Config** (`file-tile-config.json`)
    - Default folder/file colors
    - Last visited directory
    - Per-directory zoom and pan state
 
-2. **Per-Directory Metadata** (`stitch-grid.json`)
+2. **Per-Directory Metadata** (`file-tile.json`)
    - File/folder positions
    - Custom colors per item
    - Layout version
@@ -54,7 +54,7 @@ Availability is automatically detected via the `which` command.
 
 ```
 lib/
-├── stitch_desktop_grid.dart       # Main export
+├── file_tile.dart                 # Main export
 ├── src/
 │   ├── views/
 │   │   └── desktop_view.dart      # Main UI widget
@@ -141,8 +141,8 @@ Contributions are welcome! Feel free to open issues or submit PRs.
 
 ## Notes
 
-When in doubt, see /docs. There are plans for ongoing work, as well as internal and external documentation files addressing existing implementations and common patterns or pain points.
+When in doubt, see `/docs`. There are plans for ongoing work, as well as internal and external documentation files addressing existing implementations and common patterns or pain points.
 
 ---
 
-**Made with ❤️ for the Stitch project**
+**Made with ❤️**

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:stitch_desktop_grid/src/repositories/desktop_repository.dart';
-import 'package:stitch_desktop_grid/src/viewmodels/desktop_viewmodel.dart';
+import 'package:file_tile/src/repositories/desktop_repository.dart';
+import 'package:file_tile/src/viewmodels/desktop_viewmodel.dart';
 
 import 'fake_desktop_repository.dart';
 

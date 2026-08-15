@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:stitch_desktop_grid/src/utils/config_manager.dart';
+import 'package:file_tile/src/utils/config_manager.dart';
 
 void main() {
   group('ConfigManager concurrent updates', () {
@@ -95,6 +95,44 @@ void main() {
       final onDisk = json.decode(await configFile.readAsString()) as Map<String, dynamic>;
       expect(onDisk['invert_vertical_scroll'], true);
       expect(onDisk['last_visited_directory'], '/tmp/somewhere');
+    });
+  });
+
+  group('legacy file migration', () {
+    late Directory tempDir;
+    late File configFile;
+    late File legacyFile;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('config_manager_migration_test');
+      configFile = File('${tempDir.path}/file-tile-config.json');
+      legacyFile = File('${tempDir.path}/stitch-grid-config.json');
+    });
+
+    tearDown(() {
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('renames a pre-existing legacy config file to the new name on load, preserving contents', () async {
+      await legacyFile.writeAsString(json.encode({'last_visited_directory': '/tmp/somewhere'}));
+
+      final manager = ConfigManager(configFile, legacyFile: legacyFile);
+      await manager.load();
+
+      expect(await legacyFile.exists(), false, reason: 'legacy file should be renamed away');
+      expect(await configFile.exists(), true);
+      expect(manager.data['last_visited_directory'], '/tmp/somewhere');
+    });
+
+    test('does not touch the legacy file if the new-named file already exists', () async {
+      await configFile.writeAsString(json.encode({'last_visited_directory': '/new'}));
+      await legacyFile.writeAsString(json.encode({'last_visited_directory': '/old'}));
+
+      final manager = ConfigManager(configFile, legacyFile: legacyFile);
+      await manager.load();
+
+      expect(await legacyFile.exists(), true);
+      expect(manager.data['last_visited_directory'], '/new');
     });
   });
 }

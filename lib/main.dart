@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:stitch_desktop_grid/stitch_desktop_grid.dart';
+import 'package:file_tile/file_tile.dart';
 
 /// Fired by the Linux runner (linux/runner/my_application.cc) when this
 /// process is launched -- or, if already running, re-activated via D-Bus --
@@ -63,21 +63,21 @@ class MyApp extends StatelessWidget {
       child: Consumer<DesktopViewModel>(
         builder: (context, viewModel, _) {
           return MaterialApp(
-            title: 'Stitch Desktop Grid',
+            title: 'File Tile',
             themeMode: viewModel.themeMode,
             theme: ThemeData(
               brightness: Brightness.light,
               useMaterial3: true,
               colorSchemeSeed: Colors.indigo,
-              scaffoldBackgroundColor: StitchColors.light.background,
-              extensions: const [StitchColors.light],
+              scaffoldBackgroundColor: FileTileColors.light.background,
+              extensions: const [FileTileColors.light],
             ),
             darkTheme: ThemeData(
               brightness: Brightness.dark,
               useMaterial3: true,
               colorSchemeSeed: Colors.indigo,
-              scaffoldBackgroundColor: StitchColors.dark.background,
-              extensions: const [StitchColors.dark],
+              scaffoldBackgroundColor: FileTileColors.dark.background,
+              extensions: const [FileTileColors.dark],
             ),
             home: const DesktopViewPage(),
           );
