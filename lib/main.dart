@@ -1,7 +1,15 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:stitch_desktop_grid/stitch_desktop_grid.dart';
+
+/// Fired by the Linux runner (linux/runner/my_application.cc) when this
+/// process is launched -- or, if already running, re-activated via D-Bus --
+/// with a `filetile://open?path=...` deep link. See
+/// docs/flutter/ in doc-block for the sending side.
+const _openPathChannel = MethodChannel('filetile/open_path');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,16 +23,43 @@ void main() async {
     await PathService.init(homeDir);
   }
 
-  runApp(const MyApp());
+  final viewModel = DesktopViewModel();
+  _openPathChannel.setMethodCallHandler((call) async {
+    if (call.method != 'openPath') return;
+    final path = call.arguments as String;
+    await _waitUntilInitialized(viewModel);
+    await viewModel.loadDirectory(path);
+  });
+
+  runApp(MyApp(viewModel: viewModel));
+}
+
+/// Waits for [viewModel]'s async startup (reading config, loading the last
+/// directory) to finish, so a deep link that arrives during a cold start
+/// doesn't get dropped by [DesktopViewModel.loadDirectory]'s init guard.
+Future<void> _waitUntilInitialized(DesktopViewModel viewModel) {
+  if (viewModel.isInitialized) return Future.value();
+  final completer = Completer<void>();
+  void listener() {
+    if (viewModel.isInitialized) {
+      viewModel.removeListener(listener);
+      completer.complete();
+    }
+  }
+
+  viewModel.addListener(listener);
+  return completer.future;
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({Key? key, required this.viewModel}) : super(key: key);
+
+  final DesktopViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => DesktopViewModel(),
+    return ChangeNotifierProvider.value(
+      value: viewModel,
       child: Consumer<DesktopViewModel>(
         builder: (context, viewModel, _) {
           return MaterialApp(

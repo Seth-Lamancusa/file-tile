@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Stitch Grid
+Comment=Desktop grid file manager
+Exec=stitch_desktop_grid %u
+Terminal=false
+Categories=Development;Utility;
+MimeType=x-scheme-handler/filetile;
+NoDisplay=true
