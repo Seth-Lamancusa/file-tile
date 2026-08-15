@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:file_tile/file_tile.dart';
+import 'package:file_tile/src/services/linux_url_handler_registrar.dart';
 
 /// Fired by the Linux runner (linux/runner/my_application.cc) when this
 /// process is launched -- or, if already running, re-activated via D-Bus --
@@ -21,6 +22,10 @@ void main() async {
 
   if (homeDir != null) {
     await PathService.init(homeDir);
+  }
+
+  if (Platform.isLinux) {
+    unawaited(ensureRegisteredAsUrlHandler());
   }
 
   final viewModel = DesktopViewModel();

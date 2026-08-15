@@ -107,11 +107,11 @@ static void ensure_window(MyApplication* self) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "Stitch Desktop Grid");
+    gtk_header_bar_set_title(header_bar, "File Tile");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "Stitch Desktop Grid");
+    gtk_window_set_title(window, "File Tile");
   }
 
   gtk_window_set_default_size(window, 1280, 720);
@@ -203,7 +203,7 @@ static gboolean my_application_local_command_line(GApplication* application,
   }
 
   // A `filetile://...` URI passed on the command line (e.g. by a launcher
-  // invoking Exec=stitch_desktop_grid %u from the .desktop URL handler) must
+  // invoking Exec=file_tile %u from the .desktop URL handler) must
   // go through GApplication::open, not ::activate, so it reaches
   // my_application_open on both a cold start and when forwarded via D-Bus
   // to an already-running primary instance. Anything else is a normal

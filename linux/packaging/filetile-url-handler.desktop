@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Stitch Grid
+Name=File Tile
 Comment=Desktop grid file manager
-Exec=stitch_desktop_grid %u
+Exec=file_tile %u
 Terminal=false
 Categories=Development;Utility;
 MimeType=x-scheme-handler/filetile;
