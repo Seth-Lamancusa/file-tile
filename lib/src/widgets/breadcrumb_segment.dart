@@ -40,18 +40,27 @@ class _BreadcrumbSegmentState extends State<BreadcrumbSegment> {
               onTap: widget.isLast ? null : widget.onTap,
               child: Container(
                 decoration: shouldHighlight
-                  ? BoxDecoration(
-                      color: colors.overlayHover,
-                      borderRadius: BorderRadius.circular(4),
-                    )
-                  : null,
-                padding: shouldHighlight ? const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0) : EdgeInsets.zero,
+                    ? BoxDecoration(
+                        color: colors.overlayHover,
+                        borderRadius: BorderRadius.circular(4),
+                        border: widget.isDragTarget
+                            ? Border.all(
+                                color: colors.accent,
+                                width: 1.5,
+                                strokeAlign: BorderSide.strokeAlignOutside,
+                              )
+                            : null,
+                      )
+                    : null,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 4.0, vertical: 2.0),
                 child: Text(
                   widget.label,
                   style: TextStyle(
                     fontSize: 14,
                     color: widget.isLast ? colors.textPrimary : colors.textDim,
-                    fontWeight: widget.isLast ? FontWeight.bold : FontWeight.normal,
+                    fontWeight:
+                        widget.isLast ? FontWeight.bold : FontWeight.normal,
                   ),
                 ),
               ),

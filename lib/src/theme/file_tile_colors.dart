@@ -104,9 +104,11 @@ class FileTileColors extends ThemeExtension<FileTileColors> {
       overlayHover: overlayHover ?? this.overlayHover,
       iconDisabled: iconDisabled ?? this.iconDisabled,
       nodeBorderDefault: nodeBorderDefault ?? this.nodeBorderDefault,
-      nodeBackgroundDefault: nodeBackgroundDefault ?? this.nodeBackgroundDefault,
+      nodeBackgroundDefault:
+          nodeBackgroundDefault ?? this.nodeBackgroundDefault,
       nodeLabelText: nodeLabelText ?? this.nodeLabelText,
-      symlinkBadgeBackground: symlinkBadgeBackground ?? this.symlinkBadgeBackground,
+      symlinkBadgeBackground:
+          symlinkBadgeBackground ?? this.symlinkBadgeBackground,
       gridLine: gridLine ?? this.gridLine,
       gridLineOrigin: gridLineOrigin ?? this.gridLineOrigin,
       accent: accent ?? this.accent,
@@ -125,10 +127,13 @@ class FileTileColors extends ThemeExtension<FileTileColors> {
       borderSubtle: Color.lerp(borderSubtle, other.borderSubtle, t)!,
       overlayHover: Color.lerp(overlayHover, other.overlayHover, t)!,
       iconDisabled: Color.lerp(iconDisabled, other.iconDisabled, t)!,
-      nodeBorderDefault: Color.lerp(nodeBorderDefault, other.nodeBorderDefault, t)!,
-      nodeBackgroundDefault: Color.lerp(nodeBackgroundDefault, other.nodeBackgroundDefault, t)!,
+      nodeBorderDefault:
+          Color.lerp(nodeBorderDefault, other.nodeBorderDefault, t)!,
+      nodeBackgroundDefault:
+          Color.lerp(nodeBackgroundDefault, other.nodeBackgroundDefault, t)!,
       nodeLabelText: Color.lerp(nodeLabelText, other.nodeLabelText, t)!,
-      symlinkBadgeBackground: Color.lerp(symlinkBadgeBackground, other.symlinkBadgeBackground, t)!,
+      symlinkBadgeBackground:
+          Color.lerp(symlinkBadgeBackground, other.symlinkBadgeBackground, t)!,
       gridLine: Color.lerp(gridLine, other.gridLine, t)!,
       gridLineOrigin: Color.lerp(gridLineOrigin, other.gridLineOrigin, t)!,
       accent: Color.lerp(accent, other.accent, t)!,

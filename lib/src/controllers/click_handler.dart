@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../models/binding_map.dart';
 import '../models/click_event.dart';
 import '../utils/coordinate_space.dart';
 import 'selection_controller.dart';
@@ -21,7 +22,8 @@ class HitTestNode {
     final screenPos = coords.logicalToScreen(position);
     final scaledSize = size * coords.scale;
 
-    final rect = Rect.fromLTWH(screenPos.dx, screenPos.dy, scaledSize, scaledSize);
+    final rect =
+        Rect.fromLTWH(screenPos.dx, screenPos.dy, scaledSize, scaledSize);
     return rect.contains(screenPoint);
   }
 }
@@ -30,8 +32,12 @@ class HitTestNode {
 /// Decoupled from the view layer so it can be tested independently.
 class ClickHandler {
   final SelectionController selectionController;
+  BindingMap bindings;
 
-  ClickHandler({required this.selectionController});
+  ClickHandler({
+    required this.selectionController,
+    BindingMap? bindings,
+  }) : bindings = bindings ?? BindingMap.defaults;
 
   /// Process a primary (left) click event on the canvas.
   /// Performs hit testing and dispatches selection actions via selectionController.
@@ -42,7 +48,7 @@ class ClickHandler {
     required CoordinateSpace coords,
   }) {
     final modifiers = ClickModifiers.fromHardwareKeyboard();
-    final action = ClickActionMapper.mapModifiersToAction(modifiers);
+    final action = bindings.resolveClick(modifiers);
     final logicalPos = coords.screenToLogical(screenPosition);
 
     // Find which node (if any) was clicked.
@@ -92,7 +98,7 @@ class ClickHandler {
     required List<HitTestNode> nodes,
   }) {
     final modifiers = ClickModifiers.fromHardwareKeyboard();
-    final action = ClickActionMapper.mapModifiersToAction(modifiers);
+    final action = bindings.resolveClick(modifiers);
 
     switch (action) {
       case ClickAction.selectSingle:

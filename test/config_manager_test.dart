@@ -18,7 +18,8 @@ void main() {
       tempDir.deleteSync(recursive: true);
     });
 
-    test('overlapping update() calls do not clobber each other\'s keys', () async {
+    test('overlapping update() calls do not clobber each other\'s keys',
+        () async {
       final manager = ConfigManager(configFile);
       await manager.load();
 
@@ -34,13 +35,17 @@ void main() {
       }
       await Future.wait(futures);
 
-      final onDisk = json.decode(await configFile.readAsString()) as Map<String, dynamic>;
+      final onDisk =
+          json.decode(await configFile.readAsString()) as Map<String, dynamic>;
       for (var i = 0; i < 20; i++) {
-        expect(onDisk['key_$i'], i, reason: 'update for key_$i was lost to a race');
+        expect(onDisk['key_$i'], i,
+            reason: 'update for key_$i was lost to a race');
       }
     });
 
-    test('a stale full-snapshot write (old loadDirectory pattern) would lose a concurrent update -- demonstrates why it must use update() instead', () async {
+    test(
+        'a stale full-snapshot write (old loadDirectory pattern) would lose a concurrent update -- demonstrates why it must use update() instead',
+        () async {
       final manager = ConfigManager(configFile);
       await manager.load();
       await manager.update((c) {
@@ -69,7 +74,8 @@ void main() {
 
       await Future.wait([staleSnapshotWrite, settingToggle]);
 
-      final onDisk = json.decode(await configFile.readAsString()) as Map<String, dynamic>;
+      final onDisk =
+          json.decode(await configFile.readAsString()) as Map<String, dynamic>;
       expect(onDisk['last_visited_directory'], '/some/dir');
       // Demonstrates the bug: the stale snapshot (taken before the toggle)
       // overwrites disk after the toggle already wrote `true`, silently
@@ -78,7 +84,8 @@ void main() {
       expect(onDisk['invert_vertical_scroll'], false);
     });
 
-    test('a setting written by one update survives a later unrelated update', () async {
+    test('a setting written by one update survives a later unrelated update',
+        () async {
       final manager = ConfigManager(configFile);
       await manager.load();
 
@@ -92,7 +99,8 @@ void main() {
       });
       await Future.wait([first, second]);
 
-      final onDisk = json.decode(await configFile.readAsString()) as Map<String, dynamic>;
+      final onDisk =
+          json.decode(await configFile.readAsString()) as Map<String, dynamic>;
       expect(onDisk['invert_vertical_scroll'], true);
       expect(onDisk['last_visited_directory'], '/tmp/somewhere');
     });
@@ -104,7 +112,8 @@ void main() {
     late File legacyFile;
 
     setUp(() {
-      tempDir = Directory.systemTemp.createTempSync('config_manager_migration_test');
+      tempDir =
+          Directory.systemTemp.createTempSync('config_manager_migration_test');
       configFile = File('${tempDir.path}/file-tile-config.json');
       legacyFile = File('${tempDir.path}/stitch-grid-config.json');
     });
@@ -113,20 +122,27 @@ void main() {
       tempDir.deleteSync(recursive: true);
     });
 
-    test('renames a pre-existing legacy config file to the new name on load, preserving contents', () async {
-      await legacyFile.writeAsString(json.encode({'last_visited_directory': '/tmp/somewhere'}));
+    test(
+        'renames a pre-existing legacy config file to the new name on load, preserving contents',
+        () async {
+      await legacyFile.writeAsString(
+          json.encode({'last_visited_directory': '/tmp/somewhere'}));
 
       final manager = ConfigManager(configFile, legacyFile: legacyFile);
       await manager.load();
 
-      expect(await legacyFile.exists(), false, reason: 'legacy file should be renamed away');
+      expect(await legacyFile.exists(), false,
+          reason: 'legacy file should be renamed away');
       expect(await configFile.exists(), true);
       expect(manager.data['last_visited_directory'], '/tmp/somewhere');
     });
 
-    test('does not touch the legacy file if the new-named file already exists', () async {
-      await configFile.writeAsString(json.encode({'last_visited_directory': '/new'}));
-      await legacyFile.writeAsString(json.encode({'last_visited_directory': '/old'}));
+    test('does not touch the legacy file if the new-named file already exists',
+        () async {
+      await configFile
+          .writeAsString(json.encode({'last_visited_directory': '/new'}));
+      await legacyFile
+          .writeAsString(json.encode({'last_visited_directory': '/old'}));
 
       final manager = ConfigManager(configFile, legacyFile: legacyFile);
       await manager.load();

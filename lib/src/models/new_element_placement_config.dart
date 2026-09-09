@@ -15,7 +15,8 @@ class NewElementPlacementConfig {
     _validate();
   }
 
-  bool get isConstrainedAxisColumns => ['left', 'right'].contains(constrainedDirection);
+  bool get isConstrainedAxisColumns =>
+      ['left', 'right'].contains(constrainedDirection);
 
   @override
   bool operator ==(Object other) =>
@@ -29,7 +30,8 @@ class NewElementPlacementConfig {
           unconstrainedDirection == other.unconstrainedDirection;
 
   @override
-  int get hashCode => Object.hash(anchorCol, anchorRow, constrainedCount, constrainedDirection, unconstrainedDirection);
+  int get hashCode => Object.hash(anchorCol, anchorRow, constrainedCount,
+      constrainedDirection, unconstrainedDirection);
 
   void _validate() {
     final validConstrainedDirs = ['left', 'right', 'up', 'down'];
@@ -46,8 +48,10 @@ class NewElementPlacementConfig {
       );
     }
 
-    final constrainedIsHorizontal = ['left', 'right'].contains(constrainedDirection);
-    final unconstrainedIsHorizontal = ['left', 'right'].contains(unconstrainedDirection);
+    final constrainedIsHorizontal =
+        ['left', 'right'].contains(constrainedDirection);
+    final unconstrainedIsHorizontal =
+        ['left', 'right'].contains(unconstrainedDirection);
 
     if (constrainedIsHorizontal == unconstrainedIsHorizontal) {
       throw ArgumentError(
@@ -62,7 +66,8 @@ class NewElementPlacementConfig {
       anchorRow: json['anchor']['row'] as int? ?? 0,
       constrainedCount: json['constrainedCount'] as int? ?? 5,
       constrainedDirection: json['constrainedDirection'] as String? ?? 'right',
-      unconstrainedDirection: json['unconstrainedDirection'] as String? ?? 'down',
+      unconstrainedDirection:
+          json['unconstrainedDirection'] as String? ?? 'down',
     );
   }
 

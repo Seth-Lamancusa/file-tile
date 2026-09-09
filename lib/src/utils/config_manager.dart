@@ -5,7 +5,8 @@ import 'json_file_manager.dart';
 class ConfigManager extends JsonFileManager {
   late Map<String, dynamic> _data;
 
-  ConfigManager(File configFile, {File? legacyFile}) : super(configFile, legacyFile: legacyFile);
+  ConfigManager(File configFile, {File? legacyFile})
+      : super(configFile, legacyFile: legacyFile);
 
   @override
   Map<String, dynamic> validateAndLoad(String jsonString) {
@@ -32,7 +33,8 @@ class ConfigManager extends JsonFileManager {
 
   Map<String, dynamic> get data => _data;
 
-  Future<void> update(Map<String, dynamic> Function(Map<String, dynamic>) updateFn) async {
+  Future<void> update(
+      Map<String, dynamic> Function(Map<String, dynamic>) updateFn) async {
     _data = await updateAtomic(updateFn);
   }
 }

@@ -1,5 +1,7 @@
 library file_tile;
 
+export 'src/models/directory_layout_issue.dart';
+export 'src/models/metadata_backend.dart';
 export 'src/viewmodels/desktop_viewmodel.dart';
 export 'src/views/desktop_view.dart';
 export 'src/widgets/breadcrumb_segment.dart';

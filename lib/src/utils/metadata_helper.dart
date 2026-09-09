@@ -51,7 +51,8 @@ class MetadataManager extends JsonFileManager {
       try {
         NewElementPlacementConfig.fromJson(config.cast<String, dynamic>());
       } on ArgumentError catch (e) {
-        throw FormatException('Invalid newElementPlacementConfig: ${e.message}');
+        throw FormatException(
+            'Invalid newElementPlacementConfig: ${e.message}');
       }
     }
 
@@ -61,7 +62,8 @@ class MetadataManager extends JsonFileManager {
   @override
   Map<String, dynamic> getDefaultData() => {
         'layout': {},
-        'newElementPlacementConfig': NewElementPlacementConfig.defaultConfig().toJson(),
+        'newElementPlacementConfig':
+            NewElementPlacementConfig.defaultConfig().toJson(),
         'version': '1.0'
       };
 
@@ -69,12 +71,16 @@ class MetadataManager extends JsonFileManager {
     _data = await loadData();
   }
 
-  Map<String, dynamic> get layout => (_data['layout'] as Map).cast<String, dynamic>();
+  Map<String, dynamic> get layout =>
+      (_data['layout'] as Map).cast<String, dynamic>();
+
+  String get version => _data['version'] as String? ?? '1.0';
 
   NewElementPlacementConfig get newElementPlacementConfig {
     final configData = _data['newElementPlacementConfig'];
     if (configData != null) {
-      return NewElementPlacementConfig.fromJson((configData as Map).cast<String, dynamic>());
+      return NewElementPlacementConfig.fromJson(
+          (configData as Map).cast<String, dynamic>());
     }
     return NewElementPlacementConfig.defaultConfig();
   }
@@ -86,7 +92,8 @@ class MetadataManager extends JsonFileManager {
     });
   }
 
-  Future<void> updateNewElementPlacementConfig(NewElementPlacementConfig config) async {
+  Future<void> updateNewElementPlacementConfig(
+      NewElementPlacementConfig config) async {
     _data = await updateAtomic((current) {
       current['newElementPlacementConfig'] = config.toJson();
       return current;
@@ -95,7 +102,8 @@ class MetadataManager extends JsonFileManager {
 
   Future<void> removeNode(String nodeName) async {
     _data = await updateAtomic((current) {
-      final layout = Map<String, dynamic>.from((current['layout'] as Map?) ?? {});
+      final layout =
+          Map<String, dynamic>.from((current['layout'] as Map?) ?? {});
       layout.remove(nodeName);
       current['layout'] = layout;
       return current;
@@ -104,7 +112,8 @@ class MetadataManager extends JsonFileManager {
 
   Future<void> renameNode(String oldName, String newName) async {
     _data = await updateAtomic((current) {
-      final layout = Map<String, dynamic>.from((current['layout'] as Map?) ?? {});
+      final layout =
+          Map<String, dynamic>.from((current['layout'] as Map?) ?? {});
       if (layout.containsKey(oldName)) {
         layout[newName] = layout.remove(oldName);
       }

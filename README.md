@@ -17,14 +17,15 @@ A free-form desktop grid. Organize files, folders, or other items on an infinite
 The grid stores two types of configuration:
 
 1. **Global Config** (`file-tile-config.json`)
-   - Default folder/file colors
-   - Last visited directory
-   - Per-directory zoom and pan state
-
+  - Default folder/file colors
+  - Last visited directory
+  - Per-directory zoom and pan state
 2. **Per-Directory Metadata** (`file-tile.json`)
-   - File/folder positions
-   - Custom colors per item
-   - Layout version
+  - File/folder positions
+  - Custom colors per item
+  - Layout version
+
+
 
 ### Grid Layout
 
@@ -32,17 +33,23 @@ The grid stores two types of configuration:
 - **Auto-Layout**: New items automatically position in first 5 columns
 - **Snap Resolution**: Items snap to 80px increments
 
+
+
 ### Coordinate System
 
 The grid uses **1-based indexing with no zero**:
+
 - Grid cells are indexed: `..., -2, -1, 1, 2, 3, ...` (0 is skipped)
 - Grid cell 1 occupies logical pixels 0–80
 - Grid cell -1 occupies logical pixels -80 to 0
 - When calculating positions or placement regions, any result of 0 must be adjusted to 1 (moving positive) or -1 (moving negative)
 
+
+
 ### Available Apps
 
 The "Open With" menu supports:
+
 - VS Code (`code`)
 - Cursor (`cursor`)
 - Sublime Text (`subl`)
@@ -75,6 +82,8 @@ lib/
 │       └── coordinate_space.dart   # Coordinate transformations
 ```
 
+
+
 ### Notes
 
 **Operation Serialization**
@@ -85,30 +94,40 @@ Polling is suspended during drags, pans, and selection-box gestures via `beginIn
 
 **Dialog & Menu Sizing**
 To properly control width on an `AlertDialog`:
-- **Set `insetPadding`** on the `AlertDialog` (e.g., `EdgeInsets.symmetric(horizontal: 20.0)`)
-- **Wrap content in `SizedBox`** with the desired width, using `MediaQuery.of(context).size.width * 0.33` for responsive sizing
+
+- **Set** `insetPadding` on the `AlertDialog` (e.g., `EdgeInsets.symmetric(horizontal: 20.0)`)
+- **Wrap content in** `SizedBox` with the desired width, using `MediaQuery.of(context).size.width * 0.33` for responsive sizing
 
 **Best Practices**
 When implementing new features,
+
 - Refer to `/docs/flutter/flutter-best-practices.md` for guidance
+
+
 
 ## Keyboard & Mouse Controls
 
-| Action | Control |
-|--------|---------|
-| Zoom In | Ctrl + Scroll Up |
-| Zoom Out | Ctrl + Scroll Down |
-| Pan | Click + Drag |
-| Pan (Horizontal) | Shift + Scroll |
-| Selection Box | Shift + Drag |
-| Select Single | Left Click |
-| Toggle Select | Ctrl + Click |
-| Range Select | Shift + Click |
-| Context Menu | Right Click |
-| Open Item | Double Click (folders) or Right Click → Open |
-| Delete Selected | Delete Key |
-| Navigate Back | Back Button |
-| Navigate Forward | Forward Button |
+Defaults (remappable in Settings except pan, right-click, and double-click):
+
+| Action           | Control                                      |
+| ---------------- | -------------------------------------------- |
+| Zoom             | Scroll                                       |
+| Pan              | Click + Drag                                 |
+| Pan (Vertical)   | Shift + Scroll                               |
+| Pan (Horizontal) | Ctrl + Scroll                                |
+| Selection Box    | Shift + Drag                                 |
+| Select Single    | Left Click                                   |
+| Toggle Select    | Ctrl + Click                                 |
+| Range Select     | Shift + Click                                |
+| Context Menu     | Right Click                                  |
+| Open Item        | Double Click (folders) or Right Click → Open |
+| Copy / Cut / Paste | Ctrl/Cmd + C / X / V                       |
+| Delete Selected  | Delete Key                                   |
+| Navigate Back    | Back Button                                  |
+| Navigate Forward | Forward Button                               |
+
+
+
 
 ### Add More Apps to "Open With"
 
@@ -121,6 +140,8 @@ final List<Map<String, String>> _appRegistry = [
 ];
 ```
 
+
+
 ## Build Instructions
 
 `dart pub global activate flutter_distributor` if not yet run.
@@ -130,6 +151,8 @@ final List<Map<String, String>> _appRegistry = [
 
 - Search/filter functionality
 - Undo/redo support
+
+
 
 ## License
 
@@ -141,7 +164,7 @@ Contributions are welcome! Feel free to open issues or submit PRs.
 
 ## Notes
 
-When in doubt, see `/docs`. There are plans for ongoing work, as well as internal and external documentation files addressing existing implementations and common patterns or pain points.
+When in doubt, see `/docs`. There are also plans for ongoing work, plus internal and external documentation addressing existing implementations and common patterns or pain points.
 
 ---
 

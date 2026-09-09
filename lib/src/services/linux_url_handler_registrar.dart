@@ -48,8 +48,11 @@ Future<void> ensureRegisteredAsUrlHandler() async {
     await desktopFile.writeAsString(desiredContent);
 
     await Process.run('update-desktop-database', [applicationsDir.path]);
-    await Process.run(
-        'xdg-mime', ['default', 'filetile-url-handler.desktop', 'x-scheme-handler/filetile']);
+    await Process.run('xdg-mime', [
+      'default',
+      'filetile-url-handler.desktop',
+      'x-scheme-handler/filetile'
+    ]);
   } catch (e) {
     stderr.writeln('Failed to register filetile:// URL handler: $e');
   }

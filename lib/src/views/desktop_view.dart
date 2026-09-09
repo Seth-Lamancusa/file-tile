@@ -1,20 +1,31 @@
-import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import '../controllers/click_handler.dart';
+import '../models/binding_map.dart';
 import '../models/click_event.dart';
+import '../models/directory_layout_issue.dart';
+import '../models/metadata_backend.dart';
 import '../viewmodels/desktop_viewmodel.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
+import '../widgets/os_drop_target_overlay.dart';
 import '../widgets/placement_region_painter.dart';
 import '../widgets/selection_box_painter.dart';
 import '../utils/coordinate_space.dart';
+import '../utils/file_icons.dart';
+import '../utils/metadata_helper.dart';
+import '../utils/os_file_clipboard.dart';
+import '../utils/os_file_drop.dart';
 import '../theme/file_tile_colors.dart';
 
-export '../viewmodels/desktop_viewmodel.dart' show DesktopSelectAction, MoveConflictException;
+export '../viewmodels/desktop_viewmodel.dart'
+    show DesktopSelectAction, MoveConflictException;
 
 class DesktopView extends StatefulWidget {
   const DesktopView({super.key});
@@ -26,94 +37,50 @@ class DesktopView extends StatefulWidget {
 class _DesktopViewState extends State<DesktopView> {
   late FocusNode _focusNode;
   late ClickHandler _clickHandler;
-  Offset? _currentDragCursorPos;
-  String? _dragTargetNodeName; // Name of the directory being hovered as a drop target
-  String? _dragTargetBreadcrumbPath; // Path of the breadcrumb being hovered as a drop target
-  final Map<String, GlobalKey> _breadcrumbKeys = {}; // Map of path -> GlobalKey for hit-testing
-  BoxConstraints? _canvasConstraints;
-  Timer? _autoScrollTimer;
-  Map<String, Offset> _nodeOffsetFromCursor = {};
+  String?
+      _dragTargetNodeName; // Name of the directory being hovered as a drop target
+  String?
+      _dragTargetBreadcrumbPath; // Path of the breadcrumb being hovered as a drop target
+  final Map<String, GlobalKey> _breadcrumbKeys =
+      {}; // Map of path -> GlobalKey for hit-testing
   Offset? _selectionBoxStart;
   Offset? _selectionBoxEnd;
-  static const double _autoScrollMaxSpeed = 17.0;
-  static const double _autoScrollEdgeZoneMin = 20.0;
-  static const double _autoScrollEdgeZoneMax = 60.0;
-
+  final GlobalKey _canvasKey = GlobalKey();
+  Rect? _osDropCellRect;
+  int _osDropDepth = 0;
+  bool _osDragOutDropWasLocal = false;
+  List<String> _pendingDropPaths = const [];
+  bool _pendingDropCut = true;
+  String? _pendingDropDest;
+  Offset? _pendingDropAt;
+  // Deferred: directory search.
+  // bool _searchBarOpen = false;
+  // late FocusNode _searchFocusNode;
+  // late TextEditingController _searchController;
   @override
   void initState() {
     super.initState();
     _focusNode = FocusNode();
+    // Deferred: directory search.
+    // _searchFocusNode = FocusNode();
+    // _searchController = TextEditingController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
       final viewModel = context.read<DesktopViewModel>();
-      _clickHandler = ClickHandler(selectionController: viewModel.selectionController);
+      _clickHandler = _clickHandler = ClickHandler(
+        selectionController: viewModel.selectionController,
+        bindings: viewModel.bindings,
+      );
     });
   }
 
   @override
   void dispose() {
     _focusNode.dispose();
-    _autoScrollTimer?.cancel();
+    // Deferred: directory search.
+    // _searchFocusNode.dispose();
+    // _searchController.dispose();
     super.dispose();
-  }
-
-  double _calculateRamp(double distance) {
-    if (distance <= _autoScrollEdgeZoneMin) return 1.0;
-    if (distance >= _autoScrollEdgeZoneMax) return 0.0;
-    return (_autoScrollEdgeZoneMax - distance) /
-        (_autoScrollEdgeZoneMax - _autoScrollEdgeZoneMin);
-  }
-
-  void _startAutoScrollTimer(DesktopViewModel viewModel) {
-    _autoScrollTimer?.cancel();
-    _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      if (_currentDragCursorPos == null || _canvasConstraints == null) return;
-
-      final pos = _currentDragCursorPos!;
-      final constraints = _canvasConstraints!;
-
-      // Keep dragged nodes pinned to cursor (even if mouse isn't moving)
-      for (final entry in _nodeOffsetFromCursor.entries) {
-        final nodeName = entry.key;
-        final offset = entry.value;
-        final targetScreenPos = pos + offset;
-        final targetLogicalPos = viewModel.coords.screenToLogical(targetScreenPos);
-        final n = viewModel.nodes.firstWhere((x) => x.name == nodeName);
-        final delta = targetLogicalPos - n.position;
-        viewModel.updateNodePosition(nodeName, delta);
-      }
-
-      final topDist = pos.dy - AppConfig.appBarHeight;
-      final bottomDist = constraints.maxHeight - pos.dy;
-      final leftDist = pos.dx;
-      final rightDist = constraints.maxWidth - pos.dx;
-
-      // Skip vertical scroll if cursor is over the nav bar
-      final verticalRamp = (pos.dy < AppConfig.appBarHeight)
-          ? 0.0
-          : ((topDist < _autoScrollEdgeZoneMax)
-              ? _calculateRamp(topDist)
-              : ((bottomDist < _autoScrollEdgeZoneMax)
-                  ? -_calculateRamp(bottomDist)
-                  : 0.0));
-
-      final horizontalRamp = (leftDist < _autoScrollEdgeZoneMax)
-          ? _calculateRamp(leftDist)
-          : ((rightDist < _autoScrollEdgeZoneMax)
-              ? -_calculateRamp(rightDist)
-              : 0.0);
-
-      if (verticalRamp != 0.0 || horizontalRamp != 0.0) {
-        final scrollDelta =
-            Offset(horizontalRamp * _autoScrollMaxSpeed, verticalRamp * _autoScrollMaxSpeed);
-        viewModel.offset = viewModel.offset + scrollDelta;
-      }
-    });
-  }
-
-  void _stopAutoScrollTimer() {
-    _autoScrollTimer?.cancel();
-    _autoScrollTimer = null;
   }
 
   List<String> _getNodesInSelectionBox(Offset start, Offset end) {
@@ -138,24 +105,404 @@ class _DesktopViewState extends State<DesktopView> {
     return selectedNodeIds;
   }
 
-  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.delete) {
-      final viewModel = context.read<DesktopViewModel>();
-      if (viewModel.selectedNodeNames.isNotEmpty) {
-        _confirmDeleteSelected(context, viewModel);
-        return KeyEventResult.handled;
+  void _updateVisibleThumbnails(
+      DesktopViewModel viewModel, BoxConstraints constraints) {
+    final cell = GridConfig.gridCellSize * viewModel.scale;
+    // Pad the keep-alive rect so zoom/pan does not drop a thumb for one frame
+    // and flash the file icon.
+    final pad = cell * 2;
+    final keepViewport = Rect.fromLTWH(
+      -pad,
+      -pad,
+      constraints.maxWidth + pad * 2,
+      constraints.maxHeight + pad * 2,
+    );
+    final decodeViewport =
+        Rect.fromLTWH(0, 0, constraints.maxWidth, constraints.maxHeight);
+    // Below this, GPU-scale whatever is already decoded. Starting new isolates
+    // for a directory of postage stamps is what makes zoom-out hitch and flash.
+    const minDecodeCell = 28.0;
+    final shouldDecode = cell >= minDecodeCell;
+
+    final keep = <String>{};
+    final decode = <String>{};
+    for (final node in viewModel.nodes) {
+      if (node.isDirectory || !isRasterImageFile(node.name)) continue;
+      final pos = viewModel.coords.logicalToScreen(node.position);
+      final rect = Rect.fromLTWH(pos.dx, pos.dy, cell, cell);
+      if (!keepViewport.overlaps(rect)) continue;
+      final path = p.join(viewModel.currentDirectory, node.name);
+      keep.add(path);
+      if (shouldDecode && decodeViewport.overlaps(rect)) {
+        decode.add(path);
       }
     }
-    return KeyEventResult.ignored;
+    viewModel.thumbnailCache.setVisible(keep, decode: decode);
   }
 
-  Set<_BorderSide> _getVisibleBorders(DesktopNode node, DesktopViewModel viewModel) {
-    if (!viewModel.isNodeSelected(node.name)) {
-      return {_BorderSide.top, _BorderSide.right, _BorderSide.bottom, _BorderSide.left};
+  Offset _globalToCanvas(Offset globalPos) {
+    final box = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize) {
+      return box.globalToLocal(globalPos);
+    }
+    return globalPos - Offset(0, AppConfig.appBarHeight);
+  }
+
+  void _osDropEnter(DesktopViewModel viewModel) {
+    if (_osDropDepth == 0) viewModel.beginInteraction();
+    _osDropDepth++;
+  }
+
+  void _osDropLeave(DesktopViewModel viewModel) {
+    if (_osDropDepth == 0) return;
+    _osDropDepth--;
+    if (_osDropDepth == 0) {
+      viewModel.endInteraction();
+      setState(() {
+        _osDropCellRect = null;
+        _dragTargetNodeName = null;
+        _dragTargetBreadcrumbPath = null;
+      });
+    }
+  }
+
+  void _osDropEnded(DesktopViewModel viewModel) {
+    if (_osDropDepth > 0) {
+      viewModel.endInteraction();
+    }
+    _osDropDepth = 0;
+    if (!mounted) return;
+    setState(() {
+      _osDropCellRect = null;
+      _dragTargetNodeName = null;
+      _dragTargetBreadcrumbPath = null;
+    });
+  }
+
+  DropOperation _onOsDropOver(
+    DropOverEvent event,
+    DesktopViewModel viewModel, {
+    required bool breadcrumbs,
+  }) {
+    if (!dropSessionHasFiles(event.session)) return DropOperation.none;
+    final localPaths = fileTileLocalDragPaths(event.session);
+    if (breadcrumbs) {
+      final path = _hitTestBreadcrumb(event.position.global);
+      if (path == null || isDropIntoSelf(path, localPaths)) {
+        _clearOsDropAim();
+        return DropOperation.none;
+      }
+      setState(() {
+        _dragTargetBreadcrumbPath = path;
+        _dragTargetNodeName = null;
+        _osDropCellRect = null;
+      });
+    } else {
+      if (!_updateOsDropHover(viewModel, event.position.global,
+          localPaths: localPaths)) {
+        return DropOperation.none;
+      }
+    }
+    return preferredOsDropOperation(
+      controlPressed: HardwareKeyboard.instance.isControlPressed,
+      allowed: event.session.allowedOperations,
+    );
+  }
+
+  bool _updateOsDropHover(
+    DesktopViewModel viewModel,
+    Offset global, {
+    required List<String> localPaths,
+  }) {
+    final aim = _resolveOsCanvasDropAim(viewModel, global, localPaths);
+    if (aim == null) {
+      _clearOsDropAim();
+      return false;
+    }
+    if (aim.folderPath != null) {
+      final screen = viewModel.coords.logicalToScreen(aim.folderPosition!);
+      final size = GridConfig.gridCellSize * viewModel.scale;
+      setState(() {
+        _dragTargetNodeName = aim.folderName;
+        _dragTargetBreadcrumbPath = null;
+        _osDropCellRect = Rect.fromLTWH(screen.dx, screen.dy, size, size);
+      });
+      return true;
+    }
+    final screen = viewModel.coords.logicalToScreen(aim.cell!);
+    final size = viewModel.coords.renderedGridCellSize;
+    setState(() {
+      _dragTargetNodeName = null;
+      _dragTargetBreadcrumbPath = null;
+      _osDropCellRect = Rect.fromLTWH(screen.dx, screen.dy, size, size);
+    });
+    return true;
+  }
+
+  void _clearOsDropAim() {
+    if (_osDropCellRect == null &&
+        _dragTargetNodeName == null &&
+        _dragTargetBreadcrumbPath == null) {
+      return;
+    }
+    setState(() {
+      _osDropCellRect = null;
+      _dragTargetNodeName = null;
+      _dragTargetBreadcrumbPath = null;
+    });
+  }
+
+  _OsCanvasDropAim? _resolveOsCanvasDropAim(
+    DesktopViewModel viewModel,
+    Offset global,
+    List<String> localPaths,
+  ) {
+    final node = _hitTestNode(global, viewModel);
+    if (node != null) {
+      return _aimForOccupiedNode(viewModel, node, localPaths);
+    }
+    final canvas = _globalToCanvas(global);
+    final corner = viewModel.coords
+        .snapToCellCorner(viewModel.coords.screenToLogical(canvas));
+    final occupant = _nodeAtCell(viewModel, corner);
+    if (occupant != null) {
+      return _aimForOccupiedNode(viewModel, occupant, localPaths);
+    }
+    return _OsCanvasDropAim.cell(corner);
+  }
+
+  _OsCanvasDropAim? _aimForOccupiedNode(
+    DesktopViewModel viewModel,
+    DesktopNode node,
+    List<String> localPaths,
+  ) {
+    final path = p.join(viewModel.currentDirectory, node.name);
+    if (localPaths.contains(path)) return null;
+    if (!node.isDirectory) return null;
+    if (isDropIntoSelf(path, localPaths)) return null;
+    return _OsCanvasDropAim.folder(
+      folderPath: path,
+      folderName: node.name,
+      folderPosition: node.position,
+    );
+  }
+
+  DesktopNode? _hitTestNode(Offset globalPos, DesktopViewModel viewModel) {
+    final canvasPos = _globalToCanvas(globalPos);
+    final scaledSize = GridConfig.gridCellSize * viewModel.scale;
+    for (final node in viewModel.orderedNodes.reversed) {
+      final screenPos = viewModel.coords.logicalToScreen(node.position);
+      final rect =
+          Rect.fromLTWH(screenPos.dx, screenPos.dy, scaledSize, scaledSize);
+      if (rect.contains(canvasPos)) return node;
+    }
+    return null;
+  }
+
+  DesktopNode? _nodeAtCell(DesktopViewModel viewModel, Offset corner) {
+    for (final node in viewModel.nodes) {
+      if (viewModel.coords.snapToCellCorner(node.position) == corner) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _onOsPerformDrop(
+    PerformDropEvent event,
+    DesktopViewModel viewModel, {
+    required bool breadcrumbs,
+  }) async {
+    if (isFileTileLocalDrop(event.session)) {
+      _osDragOutDropWasLocal = true;
+    }
+    final defaultCut = event.acceptedOperation != DropOperation.copy;
+    final snapshot =
+        await readDropSession(event.session, defaultCut: defaultCut);
+    if (snapshot == null || snapshot.paths.isEmpty) return;
+
+    final localPaths = fileTileLocalDragPaths(event.session);
+    String? dest;
+    Offset? at;
+    if (breadcrumbs) {
+      dest = _hitTestBreadcrumb(event.position.global);
+      if (dest == null || isDropIntoSelf(dest, localPaths)) return;
+    } else {
+      final aim =
+          _resolveOsCanvasDropAim(viewModel, event.position.global, localPaths);
+      if (aim == null) return;
+      dest = aim.folderPath ?? viewModel.currentDirectory;
+      at = aim.cell;
     }
 
-    final visibleBorders = <_BorderSide>{_BorderSide.top, _BorderSide.right, _BorderSide.bottom, _BorderSide.left};
-    final nodeColor = node.color ?? (node.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
+    _pendingDropPaths = snapshot.paths;
+    _pendingDropCut = snapshot.isCut;
+    _pendingDropDest = dest;
+    _pendingDropAt = at;
+
+    try {
+      await viewModel.importPaths(
+        snapshot.paths,
+        isCut: snapshot.isCut,
+        at: at,
+        destDir: dest,
+      );
+    } on MoveConflictException catch (e) {
+      if (!mounted) return;
+      await _showNameConflictDialog(
+        context,
+        names: e.attemptedNames.isNotEmpty
+            ? e.attemptedNames.toSet()
+            : snapshot.paths.map(p.basename).toSet(),
+        targetPath: e.targetPath,
+        conflictingNames: e.conflictingNames,
+        onSkip: () => viewModel.importPaths(
+          _pendingDropPaths,
+          isCut: _pendingDropCut,
+          at: _pendingDropAt,
+          destDir: _pendingDropDest,
+          skipConflicts: true,
+        ),
+      );
+    }
+  }
+
+  void _listenForOsDragOut(DragSession session, List<String> paths) {
+    void listener() {
+      session.dragCompleted.removeListener(listener);
+      final op = session.dragCompleted.value;
+      debugPrint(
+          '[os-drag-out] done op=$op local=$_osDragOutDropWasLocal files=${paths.length}');
+      if (!mounted) return;
+      if (_osDragOutDropWasLocal) {
+        _osDragOutDropWasLocal = false;
+        return;
+      }
+      if (op == DropOperation.move) {
+        context.read<DesktopViewModel>().finalizeExternalMove(paths);
+      }
+    }
+
+    session.dragCompleted.addListener(listener);
+  }
+
+  Widget _osDropRegion({
+    required DesktopViewModel viewModel,
+    required bool breadcrumbs,
+    required Widget child,
+  }) {
+    return DropRegion(
+      formats: osFileDropFormats,
+      hitTestBehavior: HitTestBehavior.opaque,
+      onDropEnter: (_) => _osDropEnter(viewModel),
+      onDropLeave: (_) => _osDropLeave(viewModel),
+      onDropEnded: (_) => _osDropEnded(viewModel),
+      onDropOver: (event) =>
+          _onOsDropOver(event, viewModel, breadcrumbs: breadcrumbs),
+      onPerformDrop: (event) =>
+          _onOsPerformDrop(event, viewModel, breadcrumbs: breadcrumbs),
+      child: child,
+    );
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final viewModel = context.read<DesktopViewModel>();
+    final modifiers = ClickModifiers.fromHardwareKeyboard();
+    final action = viewModel.bindings.resolveKey(event.logicalKey, modifiers);
+
+    switch (action) {
+      case ControlAction.copy:
+        if (viewModel.selectedNodeNames.isEmpty) {
+          return KeyEventResult.ignored;
+        }
+        viewModel.copySelection();
+        return KeyEventResult.handled;
+      case ControlAction.cut:
+        if (viewModel.selectedNodeNames.isEmpty) {
+          return KeyEventResult.ignored;
+        }
+        viewModel.cutSelection();
+        return KeyEventResult.handled;
+      case ControlAction.paste:
+        _pasteFromShortcut(viewModel);
+        return KeyEventResult.handled;
+      case ControlAction.delete:
+        if (viewModel.selectedNodeNames.isEmpty) {
+          return KeyEventResult.ignored;
+        }
+        _confirmDeleteSelected(context, viewModel);
+        return KeyEventResult.handled;
+      default:
+        return KeyEventResult.ignored;
+    }
+  }
+
+  // Deferred: directory search.
+  // void _openSearchBar() {
+  //   setState(() => _searchBarOpen = true);
+  //   WidgetsBinding.instance.addPostFrameCallback((_) {
+  //     _searchFocusNode.requestFocus();
+  //   });
+  // }
+
+  Future<void> _pasteFromShortcut(DesktopViewModel viewModel) async {
+    try {
+      await viewModel.paste();
+    } on MoveConflictException catch (e) {
+      if (!mounted) return;
+      await _showNameConflictDialog(
+        context,
+        names: e.attemptedNames.isNotEmpty
+            ? e.attemptedNames.toSet()
+            : viewModel.clipboard?.names.toSet() ?? {},
+        targetPath: e.targetPath,
+        conflictingNames: e.conflictingNames,
+        onSkip: () => viewModel.paste(skipConflicts: true),
+      );
+    }
+  }
+
+  Future<void> _pasteAt(
+      DesktopViewModel viewModel, Offset logicalPosition) async {
+    final snappedPos = viewModel.coords.snapToCellCorner(logicalPosition);
+    try {
+      final pasted = await viewModel.paste(at: snappedPos);
+      if (!pasted) throw StateError('Nothing to paste');
+    } on MoveConflictException catch (e) {
+      if (!mounted) return;
+      await _showNameConflictDialog(
+        context,
+        names: e.attemptedNames.isNotEmpty
+            ? e.attemptedNames.toSet()
+            : viewModel.clipboard?.names.toSet() ?? {},
+        targetPath: e.targetPath,
+        conflictingNames: e.conflictingNames,
+        onSkip: () => viewModel.paste(at: snappedPos, skipConflicts: true),
+      );
+      rethrow;
+    }
+  }
+
+  Set<_BorderSide> _getVisibleBorders(
+      DesktopNode node, DesktopViewModel viewModel) {
+    if (!viewModel.isNodeSelected(node.name)) {
+      return {
+        _BorderSide.top,
+        _BorderSide.right,
+        _BorderSide.bottom,
+        _BorderSide.left
+      };
+    }
+
+    final visibleBorders = <_BorderSide>{
+      _BorderSide.top,
+      _BorderSide.right,
+      _BorderSide.bottom,
+      _BorderSide.left
+    };
+    final nodeColor = node.color ??
+        (node.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
     final gridSize = GridConfig.gridCellSize;
 
     // Check each neighbor direction and suppress borders if adjacent selected node has same color
@@ -165,7 +512,10 @@ class _DesktopViewState extends State<DesktopView> {
       final isNeighborSelected = viewModel.isNodeSelected(neighbor.name);
       if (!isNeighborSelected) continue;
 
-      final neighborColor = neighbor.color ?? (neighbor.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
+      final neighborColor = neighbor.color ??
+          (neighbor.isDirectory
+              ? viewModel.directoryColor
+              : viewModel.fileColor);
       final isSameColor = nodeColor == neighborColor;
       if (!isSameColor) continue;
 
@@ -204,10 +554,14 @@ class _DesktopViewState extends State<DesktopView> {
       viewModel.clearError();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+          final messenger = ScaffoldMessenger.of(context);
+          messenger.clearSnackBars();
+          messenger.showSnackBar(SnackBar(content: Text(error)));
         }
       });
     }
+
+    final layoutIssue = viewModel.layoutIssue;
 
     return Scaffold(
       backgroundColor: colors.background,
@@ -220,13 +574,17 @@ class _DesktopViewState extends State<DesktopView> {
               icon: const Icon(Icons.arrow_back, size: 18),
               onPressed: viewModel.canGoBack ? viewModel.back : null,
               tooltip: 'Back',
-              color: viewModel.canGoBack ? colors.textPrimary : colors.iconDisabled,
+              color: viewModel.canGoBack
+                  ? colors.textPrimary
+                  : colors.iconDisabled,
             ),
             IconButton(
               icon: const Icon(Icons.arrow_forward, size: 18),
               onPressed: viewModel.canGoForward ? viewModel.forward : null,
               tooltip: 'Forward',
-              color: viewModel.canGoForward ? colors.textPrimary : colors.iconDisabled,
+              color: viewModel.canGoForward
+                  ? colors.textPrimary
+                  : colors.iconDisabled,
             ),
             IconButton(
               icon: const Icon(Icons.arrow_upward, size: 18),
@@ -235,10 +593,14 @@ class _DesktopViewState extends State<DesktopView> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: _buildBreadcrumbs(viewModel),
+              child: _osDropRegion(
+                viewModel: viewModel,
+                breadcrumbs: true,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: _buildBreadcrumbs(viewModel),
+                  ),
                 ),
               ),
             ),
@@ -250,6 +612,12 @@ class _DesktopViewState extends State<DesktopView> {
             onPressed: () => viewModel.refresh(),
             tooltip: 'Refresh',
           ),
+          // Deferred: directory search.
+          // IconButton(
+          //   icon: const Icon(Icons.search),
+          //   onPressed: _openSearchBar,
+          //   tooltip: 'Search',
+          // ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () => _showSettingsModal(context, viewModel),
@@ -258,382 +626,353 @@ class _DesktopViewState extends State<DesktopView> {
           const SizedBox(width: 8),
         ],
       ),
-      body: Focus(
-        focusNode: _focusNode,
-        onKeyEvent: _handleKeyEvent,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            _canvasConstraints = constraints;
-            return Listener(
-            onPointerDown: (event) {
-              // Adjust click position from window to canvas coordinates
-              final canvasPosition = event.position - Offset(0, AppConfig.appBarHeight);
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (layoutIssue != null) _LayoutIssueBanner(issue: layoutIssue),
+          // Deferred: directory search.
+          // if (_searchBarOpen) _buildSearchBar(viewModel, colors),
+          Expanded(
+            child: Focus(
+              focusNode: _focusNode,
+              onKeyEvent: _handleKeyEvent,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  _updateVisibleThumbnails(viewModel, constraints);
+                  return _osDropRegion(
+                    viewModel: viewModel,
+                    breadcrumbs: false,
+                    child: Listener(
+                      key: _canvasKey,
+                      onPointerDown: (event) {
+                        _clickHandler.bindings = viewModel.bindings;
+                        // Adjust click position from window to canvas coordinates
+                        final canvasPosition = _globalToCanvas(event.position);
 
-              // Build hit test nodes once for both left and right clicks
-              final nodes = viewModel.nodes.map((node) {
-                return HitTestNode(
-                  id: node.name,
-                  position: node.position,
-                  size: GridConfig.gridCellSize,
-                );
-              }).toList();
-
-              // Handle left-click on empty canvas (deselect all).
-              // Clicks that hit a node are handled by that node's own GestureDetector
-              // (onTap/onPanDown), so its tap-vs-drag arena can decide what to do.
-              if (event.buttons & kPrimaryButton != 0) {
-                final hitNode = nodes.any((n) => n.hitsPoint(canvasPosition, viewModel.coords));
-                if (!hitNode) {
-                  _clickHandler.handlePrimaryPointerDown(
-                    screenPosition: canvasPosition,
-                    nodes: nodes,
-                    coords: viewModel.coords,
-                  );
-                }
-              }
-              // Handle right-click for context menu (apply immediately)
-              else if (event.buttons & kSecondaryButton != 0) {
-                final result = _clickHandler.handleSecondaryPointerDown(
-                  screenPosition: canvasPosition,
-                  nodes: nodes,
-                  coords: viewModel.coords,
-                );
-
-                switch (result) {
-                  case NodeClickResult():
-                    // Click handler already selected the node
-                    _showNodeContextMenu(context, event.position, viewModel);
-                  case BackgroundClickResult():
-                    _showBackgroundContextMenu(context, event.position, result.logicalPosition, viewModel);
-                }
-              }
-            },
-            onPointerSignal: (pointerSignal) {
-              if (pointerSignal is PointerScrollEvent) {
-                final isCtrlPressed = HardwareKeyboard.instance.isControlPressed;
-                final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
-
-                if (isShiftPressed) {
-                  // Shift + scroll = vertical pan
-                  final delta = viewModel.invertVerticalScroll
-                    ? -pointerSignal.scrollDelta.dy
-                    : pointerSignal.scrollDelta.dy;
-                  viewModel.offset = viewModel.offset + Offset(0, delta);
-                } else if (isCtrlPressed) {
-                  // Ctrl + scroll = horizontal pan
-                  final delta = viewModel.invertHorizontalScroll
-                    ? -pointerSignal.scrollDelta.dy
-                    : pointerSignal.scrollDelta.dy;
-                  viewModel.offset = viewModel.offset + Offset(delta, 0);
-                } else {
-                  // Default = zoom (relative to cursor)
-                  // Adjust cursor position from global to canvas coordinates
-                  final cursorScreenPos = pointerSignal.position - Offset(0, AppConfig.appBarHeight);
-
-                  // Get the logical position under the cursor before zoom
-                  final logicalUnderCursor = viewModel.coords.screenToLogical(cursorScreenPos);
-
-                  double zoomFactor = 1.1;
-                  double newScale = viewModel.scale;
-                  if (pointerSignal.scrollDelta.dy > 0) {
-                    newScale /= zoomFactor;
-                  } else {
-                    newScale *= zoomFactor;
-                  }
-                  newScale = newScale.clamp(0.1, 10.0);
-
-                  // Calculate new offset to keep the logical point under the cursor
-                  final newOffset = cursorScreenPos - (logicalUnderCursor * newScale);
-
-                  viewModel.scale = newScale;
-                  viewModel.offset = newOffset;
-                }
-              }
-            },
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onPanDown: (details) {
-                      // Covers both canvas panning and the selection box below -
-                      // either way, suspend polling for the whole gesture so a
-                      // background reload can't fight with it.
-                      viewModel.beginInteraction();
-                      if (HardwareKeyboard.instance.isShiftPressed) {
-                        setState(() {
-                          _selectionBoxStart = details.localPosition;
-                          _selectionBoxEnd = details.localPosition;
-                        });
-                      }
-                    },
-                    onPanUpdate: (details) {
-                      if (_selectionBoxStart != null) {
-                        setState(() {
-                          _selectionBoxEnd = details.localPosition;
-                        });
-                      } else {
-                        viewModel.offset = viewModel.offset + details.delta;
-                      }
-                    },
-                    onPanCancel: () {
-                      viewModel.endInteraction();
-                      if (_selectionBoxStart != null) {
-                        setState(() {
-                          _selectionBoxStart = null;
-                          _selectionBoxEnd = null;
-                        });
-                      }
-                    },
-                    onPanEnd: (details) {
-                      viewModel.endInteraction();
-                      if (_selectionBoxStart != null && _selectionBoxEnd != null) {
-                        final selectedNodeIds = _getNodesInSelectionBox(_selectionBoxStart!, _selectionBoxEnd!);
-                        if (selectedNodeIds.isNotEmpty) {
-                          viewModel.selectionController.rangeSelect(selectedNodeIds);
-                        } else {
-                          viewModel.selectionController.clearSelection();
-                        }
-                        setState(() {
-                          _selectionBoxStart = null;
-                          _selectionBoxEnd = null;
-                        });
-                      }
-                    },
-                    child: ClipRect(
-                      child: CustomPaint(
-                        size: Size.infinite,
-                        painter: GridPainter(
-                          offset: viewModel.offset,
-                          scale: viewModel.scale,
-                          lineColor: colors.gridLine,
-                          originLineColor: colors.gridLineOrigin,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                if (_selectionBoxStart != null && _selectionBoxEnd != null)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(
-                        size: Size.infinite,
-                        painter: SelectionBoxPainter(
-                          start: _selectionBoxStart!,
-                          end: _selectionBoxEnd!,
-                        ),
-                      ),
-                    ),
-                  ),
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      size: Size.infinite,
-                      painter: PlacementRegionPainter(
-                        config: viewModel.newElementPlacementConfig,
-                        coords: viewModel.coords,
-                      ),
-                    ),
-                  ),
-                ),
-                ...viewModel.orderedNodes.map((node) {
-                  final screenPos = viewModel.coords.logicalToScreen(node.position);
-                  final isSelected = viewModel.isNodeSelected(node.name);
-                  final visibleBorders = _getVisibleBorders(node, viewModel);
-                  return Positioned(
-                    key: ValueKey(node.name),
-                    left: screenPos.dx,
-                    top: screenPos.dy,
-                    child: GestureDetector(
-                      // Flutter's gesture arena natively disambiguates tap vs. drag on this
-                      // same GestureDetector: onTap fires only if the pointer never moves
-                      // beyond the touch slop; onPanUpdate/onPanEnd fire once real movement
-                      // is detected. No manual timers needed.
-                      onTap: () {
-                        final hitTestNodes = viewModel.nodes.map((n) {
+                        // Build hit test nodes once for both left and right clicks
+                        final nodes = viewModel.nodes.map((node) {
                           return HitTestNode(
-                            id: n.name,
-                            position: n.position,
+                            id: node.name,
+                            position: node.position,
                             size: GridConfig.gridCellSize,
                           );
                         }).toList();
-                        _clickHandler.handleNodeTap(nodeId: node.name, nodes: hitTestNodes);
-                      },
-                      onPanDown: (details) {
-                        // Determine which nodes are being dragged
-                        final nodesToDrag = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
-                          ? viewModel.selectedNodeNames
-                          : {node.name};
-                        viewModel.startDrag(nodesToDrag);
-                        _currentDragCursorPos = details.globalPosition;
 
-                        // Capture offset from cursor to each node's screen position
-                        _nodeOffsetFromCursor.clear();
-                        for (final nodeName in nodesToDrag) {
-                          final n = viewModel.nodes.firstWhere((x) => x.name == nodeName);
-                          final nodeScreenPos = viewModel.coords.logicalToScreen(n.position);
-                          _nodeOffsetFromCursor[nodeName] = nodeScreenPos - details.globalPosition;
-                        }
-
-                        _startAutoScrollTimer(viewModel);
-                      },
-                      onPanCancel: () {
-                        // Pan lost the gesture arena to the tap recognizer (or was otherwise
-                        // interrupted) - clear the drag state we speculatively captured.
-                        viewModel.cancelDrag();
-                        _currentDragCursorPos = null;
-                        _nodeOffsetFromCursor.clear();
-                        _stopAutoScrollTimer();
-                      },
-                      onPanUpdate: (details) {
-                        _currentDragCursorPos = details.globalPosition;
-
-                        // Determine which nodes are being dragged
-                        final nodesDragging = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
-                          ? viewModel.selectedNodeNames
-                          : {node.name};
-
-                        // Keep dragged nodes pinned to cursor with their saved offset
-                        for (final nodeName in nodesDragging) {
-                          if (_nodeOffsetFromCursor.containsKey(nodeName)) {
-                            final targetScreenPos = details.globalPosition + _nodeOffsetFromCursor[nodeName]!;
-                            final targetLogicalPos = viewModel.coords.screenToLogical(targetScreenPos);
-                            final n = viewModel.nodes.firstWhere((x) => x.name == nodeName);
-                            final delta = targetLogicalPos - n.position;
-                            viewModel.updateNodePosition(nodeName, delta);
+                        // Handle left-click on empty canvas (deselect all).
+                        // Clicks that hit a node are handled by that node's own GestureDetector
+                        // (onTap/onPanDown), so its tap-vs-drag arena can decide what to do.
+                        if (event.buttons & kPrimaryButton != 0) {
+                          final hitNode = nodes.any((n) =>
+                              n.hitsPoint(canvasPosition, viewModel.coords));
+                          if (!hitNode) {
+                            _clickHandler.handlePrimaryPointerDown(
+                              screenPosition: canvasPosition,
+                              nodes: nodes,
+                              coords: viewModel.coords,
+                            );
                           }
                         }
-
-                        // Update which directory or breadcrumb is being hovered as a drop target
-                        String? targetNodeName;
-                        String? targetBreadcrumbPath;
-
-                        // Check breadcrumbs first (they're in the AppBar, higher priority)
-                        final breadcrumbPath = _hitTestBreadcrumb(details.globalPosition);
-                        if (breadcrumbPath != null && !nodesDragging.contains(p.basename(breadcrumbPath))) {
-                          targetBreadcrumbPath = breadcrumbPath;
-                        } else {
-                          // Check directory widgets in the grid
-                          final targetDir = _hitTestDirectoryWidget(
-                            details.globalPosition,
-                            viewModel,
-                            excludeNodeNames: nodesDragging,
+                        // Handle right-click for context menu (apply immediately)
+                        else if (event.buttons & kSecondaryButton != 0) {
+                          final result =
+                              _clickHandler.handleSecondaryPointerDown(
+                            screenPosition: canvasPosition,
+                            nodes: nodes,
+                            coords: viewModel.coords,
                           );
-                          if (targetDir != null) {
-                            for (final n in viewModel.nodes) {
-                              if (p.join(viewModel.currentDirectory, n.name) == targetDir) {
-                                targetNodeName = n.name;
-                                break;
-                              }
-                            }
+
+                          switch (result) {
+                            case NodeClickResult():
+                              // Click handler already selected the node
+                              _showNodeContextMenu(
+                                  context, event.position, viewModel);
+                            case BackgroundClickResult():
+                              _showBackgroundContextMenu(
+                                  context,
+                                  event.position,
+                                  result.logicalPosition,
+                                  viewModel);
                           }
                         }
-
-                        setState(() {
-                          _dragTargetNodeName = targetNodeName;
-                          _dragTargetBreadcrumbPath = targetBreadcrumbPath;
-                        });
                       },
-                      onPanEnd: (details) async {
-                        _stopAutoScrollTimer();
-                        _nodeOffsetFromCursor.clear();
-                        // Determine which nodes were being dragged
-                        final nodesDragged = viewModel.isNodeSelected(node.name) && viewModel.selectedNodeNames.length > 1
-                          ? viewModel.selectedNodeNames
-                          : {node.name};
+                      onPointerSignal: (pointerSignal) {
+                        if (pointerSignal is PointerScrollEvent) {
+                          final modifiers =
+                              ClickModifiers.fromHardwareKeyboard();
+                          final scrollAction =
+                              viewModel.bindings.resolveScroll(modifiers);
 
-                        // Check breadcrumbs first (higher priority than grid)
-                        final breadcrumbPath = _hitTestBreadcrumb(details.globalPosition);
-                        if (breadcrumbPath != null && !nodesDragged.contains(p.basename(breadcrumbPath))) {
-                          try {
-                            await viewModel.moveNodesToDirectory(nodesDragged, breadcrumbPath);
-                          } on MoveConflictException catch (e) {
-                            viewModel.revertDragPositions(nodesDragged);
-                            if (mounted) {
-                              await _showMoveConflictDialog(context, nodesDragged, breadcrumbPath, e.conflictingNames);
+                          if (scrollAction == ControlAction.panVertical) {
+                            final delta = viewModel.invertVerticalScroll
+                                ? -pointerSignal.scrollDelta.dy
+                                : pointerSignal.scrollDelta.dy;
+                            viewModel.offset =
+                                viewModel.offset + Offset(0, delta);
+                          } else if (scrollAction ==
+                              ControlAction.panHorizontal) {
+                            final delta = viewModel.invertHorizontalScroll
+                                ? -pointerSignal.scrollDelta.dy
+                                : pointerSignal.scrollDelta.dy;
+                            viewModel.offset =
+                                viewModel.offset + Offset(delta, 0);
+                          } else if (scrollAction == ControlAction.zoom) {
+                            final cursorScreenPos =
+                                _globalToCanvas(pointerSignal.position);
+
+                            final logicalUnderCursor = viewModel.coords
+                                .screenToLogical(cursorScreenPos);
+
+                            double zoomFactor = 1.1;
+                            double newScale = viewModel.scale;
+                            if (pointerSignal.scrollDelta.dy > 0) {
+                              newScale /= zoomFactor;
+                            } else {
+                              newScale *= zoomFactor;
                             }
-                          } catch (e) {
-                            viewModel.revertDragPositions(nodesDragged);
-                          }
-                          setState(() {
-                            _dragTargetNodeName = null;
-                            _dragTargetBreadcrumbPath = null;
-                          });
-                          _currentDragCursorPos = null;
-                          return;
-                        }
+                            newScale = newScale.clamp(0.1, 10.0);
 
-                        // Check directory widgets in the grid
-                        final targetDirectory = _hitTestDirectoryWidget(
-                          details.globalPosition,
-                          viewModel,
-                          excludeNodeNames: nodesDragged,
-                        );
-                        if (targetDirectory != null) {
-                          try {
-                            await viewModel.moveNodesToDirectory(nodesDragged, targetDirectory);
-                          } on MoveConflictException catch (e) {
-                            viewModel.revertDragPositions(nodesDragged);
-                            if (mounted) {
-                              await _showMoveConflictDialog(context, nodesDragged, targetDirectory, e.conflictingNames);
-                            }
-                          } catch (e) {
-                            viewModel.revertDragPositions(nodesDragged);
-                          }
-                          setState(() {
-                            _dragTargetNodeName = null;
-                            _dragTargetBreadcrumbPath = null;
-                          });
-                          _currentDragCursorPos = null;
-                          return;
-                        }
+                            final newOffset = cursorScreenPos -
+                                (logicalUnderCursor * newScale);
 
-                        // No drop target found - snap to grid with collision detection
-                        await viewModel.completeOrRevertDrag(nodesDragged);
-                        setState(() {
-                          _dragTargetNodeName = null;
-                          _dragTargetBreadcrumbPath = null;
-                        });
-                        _currentDragCursorPos = null;
+                            viewModel.scale = newScale;
+                            viewModel.offset = newOffset;
+                          }
+                        }
                       },
-                      onDoubleTap: node.isDirectory
-                        ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
-                        : () => viewModel.openSystemDefault(node.name),
-                      child: _DesktopNodeWidget(
-                        node: node,
-                        scale: viewModel.scale,
-                        gridSize: GridConfig.gridCellSize,
-                        directoryColor: viewModel.directoryColor,
-                        fileColor: viewModel.fileColor,
-                        isSelected: isSelected,
-                        visibleBorders: visibleBorders,
-                        isDragTarget: _dragTargetNodeName == node.name,
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onPanDown: (details) {
+                                // Covers both canvas panning and the selection box below -
+                                // either way, suspend polling for the whole gesture so a
+                                // background reload can't fight with it.
+                                viewModel.beginInteraction();
+                                if (viewModel.bindings.isSelectionBoxModifiers(
+                                    ClickModifiers.fromHardwareKeyboard())) {
+                                  setState(() {
+                                    _selectionBoxStart = details.localPosition;
+                                    _selectionBoxEnd = details.localPosition;
+                                  });
+                                }
+                              },
+                              onPanUpdate: (details) {
+                                if (_selectionBoxStart != null) {
+                                  setState(() {
+                                    _selectionBoxEnd = details.localPosition;
+                                  });
+                                } else {
+                                  viewModel.offset =
+                                      viewModel.offset + details.delta;
+                                }
+                              },
+                              onPanCancel: () {
+                                viewModel.endInteraction();
+                                if (_selectionBoxStart != null) {
+                                  setState(() {
+                                    _selectionBoxStart = null;
+                                    _selectionBoxEnd = null;
+                                  });
+                                }
+                              },
+                              onPanEnd: (details) {
+                                viewModel.endInteraction();
+                                if (_selectionBoxStart != null &&
+                                    _selectionBoxEnd != null) {
+                                  final selectedNodeIds =
+                                      _getNodesInSelectionBox(
+                                          _selectionBoxStart!,
+                                          _selectionBoxEnd!);
+                                  if (selectedNodeIds.isNotEmpty) {
+                                    viewModel.selectionController
+                                        .rangeSelect(selectedNodeIds);
+                                  } else {
+                                    viewModel.selectionController
+                                        .clearSelection();
+                                  }
+                                  setState(() {
+                                    _selectionBoxStart = null;
+                                    _selectionBoxEnd = null;
+                                  });
+                                }
+                              },
+                              child: ClipRect(
+                                child: CustomPaint(
+                                  size: Size.infinite,
+                                  painter: GridPainter(
+                                    offset: viewModel.offset,
+                                    scale: viewModel.scale,
+                                    lineColor: colors.gridLine,
+                                    originLineColor: colors.gridLineOrigin,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (_selectionBoxStart != null &&
+                              _selectionBoxEnd != null)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  size: Size.infinite,
+                                  painter: SelectionBoxPainter(
+                                    start: _selectionBoxStart!,
+                                    end: _selectionBoxEnd!,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: CustomPaint(
+                                size: Size.infinite,
+                                painter: PlacementRegionPainter(
+                                  config: viewModel.newElementPlacementConfig,
+                                  coords: viewModel.coords,
+                                ),
+                              ),
+                            ),
+                          ),
+                          ...viewModel.orderedNodes.map((node) {
+                            final screenPos =
+                                viewModel.coords.logicalToScreen(node.position);
+                            final isSelected =
+                                viewModel.isNodeSelected(node.name);
+                            final visibleBorders =
+                                _getVisibleBorders(node, viewModel);
+                            return Positioned(
+                              key: ValueKey(node.name),
+                              left: screenPos.dx,
+                              top: screenPos.dy,
+                              child: DragItemWidget(
+                                dragItemProvider: (request) async {
+                                  final namesToDrag = viewModel
+                                              .isNodeSelected(node.name) &&
+                                          viewModel.selectedNodeNames.length > 1
+                                      ? viewModel.selectedNodeNames
+                                      : {node.name};
+                                  final paths = [
+                                    for (final name in namesToDrag)
+                                      if (name != MetadataManager.fileName)
+                                        p.join(viewModel.currentDirectory, name)
+                                  ];
+                                  if (paths.isEmpty) return null;
+                                  _osDragOutDropWasLocal = false;
+                                  _listenForOsDragOut(request.session, paths);
+                                  final copy = HardwareKeyboard
+                                      .instance.isControlPressed;
+                                  debugPrint(
+                                      '[os-drag-out] start copy=$copy files=${paths.length}');
+                                  final item = DragItem(
+                                    suggestedName: p.basename(paths.first),
+                                    localData: {
+                                      fileTileDragLocalKey: true,
+                                      fileTileDragLocalPathsKey: paths,
+                                    },
+                                  );
+                                  item.add(gnomeCopiedFilesFormat(
+                                      encodeGnomeCopiedFiles(paths,
+                                          isCut: !copy)));
+                                  item.add(fileUriListFormat(
+                                      encodeFileUriList(paths)));
+                                  return item;
+                                },
+                                allowedOperations: () =>
+                                    osFileDragOutOperations(
+                                  controlPressed: HardwareKeyboard
+                                      .instance.isControlPressed,
+                                ),
+                                child: DraggableWidget(
+                                  child: GestureDetector(
+                                    onTap: () {
+                                      _clickHandler.bindings =
+                                          viewModel.bindings;
+                                      final hitTestNodes =
+                                          viewModel.nodes.map((n) {
+                                        return HitTestNode(
+                                          id: n.name,
+                                          position: n.position,
+                                          size: GridConfig.gridCellSize,
+                                        );
+                                      }).toList();
+                                      _clickHandler.handleNodeTap(
+                                          nodeId: node.name,
+                                          nodes: hitTestNodes);
+                                    },
+                                    onDoubleTap: node.isDirectory
+                                        ? () => viewModel.loadDirectory(p.join(
+                                            viewModel.currentDirectory,
+                                            node.name))
+                                        : () => viewModel
+                                            .openSystemDefault(node.name),
+                                    child: Opacity(
+                                      opacity: viewModel.isCutPending(node.name)
+                                          ? 0.45
+                                          : 1,
+                                      child: _DesktopNodeWidget(
+                                        node: node,
+                                        scale: viewModel.scale,
+                                        gridSize: GridConfig.gridCellSize,
+                                        directoryColor:
+                                            viewModel.directoryColor,
+                                        fileColor: viewModel.fileColor,
+                                        isSelected: isSelected,
+                                        icon: iconForEntry(node.name,
+                                            isDirectory: node.isDirectory),
+                                        thumbnail: viewModel.thumbnailCache
+                                            .imageFor(p.join(
+                                                viewModel.currentDirectory,
+                                                node.name)),
+                                        // Deferred: directory search.
+                                        // isSearchMatch:
+                                        //     viewModel.isSearchMatch(node.name),
+                                        visibleBorders: visibleBorders,
+                                        isDragTarget:
+                                            _dragTargetNodeName == node.name,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }),
+                          if (_osDropCellRect != null)
+                            Positioned.fill(
+                              child: OsDropTargetOverlay(
+                                cellScreenRect: _osDropCellRect!,
+                                color: colors.accent,
+                              ),
+                            ),
+                          if (viewModel.isLoading && viewModel.nodes.isEmpty)
+                            Center(
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const CircularProgressIndicator(
+                                    strokeWidth: 2),
+                              ),
+                            ),
+                          if (viewModel.isSwitchingMetadataBackend)
+                            const _SwitchingLayoutStorageOverlay(),
+                        ],
                       ),
                     ),
                   );
-                }),
-                if (viewModel.isLoading)
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-              ],
+                },
+              ),
             ),
-            );
-          },
-        ),
+          ),
+        ],
       ),
     );
   }
 
   void _handleContextMenuShiftDragStart(Offset globalPos) {
-    final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+    final canvasPosition = _globalToCanvas(globalPos);
     setState(() {
       _selectionBoxStart = canvasPosition;
       _selectionBoxEnd = canvasPosition;
@@ -641,7 +980,7 @@ class _DesktopViewState extends State<DesktopView> {
   }
 
   void _handleContextMenuShiftDragUpdate(Offset globalPos) {
-    final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+    final canvasPosition = _globalToCanvas(globalPos);
     setState(() {
       _selectionBoxEnd = canvasPosition;
     });
@@ -649,7 +988,8 @@ class _DesktopViewState extends State<DesktopView> {
 
   void _handleContextMenuShiftDragEnd(DesktopViewModel viewModel) {
     if (_selectionBoxStart != null && _selectionBoxEnd != null) {
-      final selectedNodeIds = _getNodesInSelectionBox(_selectionBoxStart!, _selectionBoxEnd!);
+      final selectedNodeIds =
+          _getNodesInSelectionBox(_selectionBoxStart!, _selectionBoxEnd!);
       if (selectedNodeIds.isNotEmpty) {
         viewModel.selectionController.rangeSelect(selectedNodeIds);
       } else {
@@ -662,12 +1002,13 @@ class _DesktopViewState extends State<DesktopView> {
     });
   }
 
-  void _showBackgroundContextMenu(BuildContext context, Offset globalPosition, Offset logicalPosition, DesktopViewModel viewModel) {
+  void _showBackgroundContextMenu(BuildContext context, Offset globalPosition,
+      Offset logicalPosition, DesktopViewModel viewModel) {
     CascadingMenu.show(
       context,
       position: globalPosition,
       onBarrierLeftTapped: (globalPos) {
-        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final canvasPosition = _globalToCanvas(globalPos);
         final nodes = viewModel.nodes.map((node) {
           return HitTestNode(
             id: node.name,
@@ -682,7 +1023,7 @@ class _DesktopViewState extends State<DesktopView> {
         );
       },
       onBarrierRightTapped: (globalPos) {
-        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final canvasPosition = _globalToCanvas(globalPos);
         final nodes = viewModel.nodes.map((node) {
           return HitTestNode(
             id: node.name,
@@ -702,32 +1043,58 @@ class _DesktopViewState extends State<DesktopView> {
             }
             _showNodeContextMenu(context, globalPos, viewModel);
           case BackgroundClickResult():
-            _showBackgroundContextMenu(context, globalPos, result.logicalPosition, viewModel);
+            _showBackgroundContextMenu(
+                context, globalPos, result.logicalPosition, viewModel);
         }
       },
       onBarrierShiftDragStart: _handleContextMenuShiftDragStart,
       onBarrierShiftDragUpdate: _handleContextMenuShiftDragUpdate,
       onBarrierShiftDragEnd: () => _handleContextMenuShiftDragEnd(viewModel),
+      isSelectionBoxGesture: (event) =>
+          event.buttons & kPrimaryButton != 0 &&
+          viewModel.bindings
+              .isSelectionBoxModifiers(ClickModifiers.fromHardwareKeyboard()),
       items: [
         CascadingMenuItem(
           label: 'New Folder',
           icon: Icons.create_new_folder,
           onTap: () {
-            final snappedPos = viewModel.coords.snapToCellCorner(logicalPosition);
-            final (gridX, gridY) = viewModel.coords.logicalPosToGridIndices(snappedPos);
-            debugPrint('[CREATE FOLDER] logical: (${logicalPosition.dx.toStringAsFixed(1)}, ${logicalPosition.dy.toStringAsFixed(1)}) | snapped: (${snappedPos.dx.toStringAsFixed(1)}, ${snappedPos.dy.toStringAsFixed(1)}) | grid: ($gridX, $gridY)');
-            _promptCreate(context, viewModel, isDirectory: true, gridPosition: snappedPos, originalLogicalPos: logicalPosition);
+            final snappedPos =
+                viewModel.coords.snapToCellCorner(logicalPosition);
+            final (gridX, gridY) =
+                viewModel.coords.logicalPosToGridIndices(snappedPos);
+            debugPrint(
+                '[CREATE FOLDER] logical: (${logicalPosition.dx.toStringAsFixed(1)}, ${logicalPosition.dy.toStringAsFixed(1)}) | snapped: (${snappedPos.dx.toStringAsFixed(1)}, ${snappedPos.dy.toStringAsFixed(1)}) | grid: ($gridX, $gridY)');
+            _promptCreate(context, viewModel,
+                isDirectory: true,
+                gridPosition: snappedPos,
+                originalLogicalPos: logicalPosition);
           },
         ),
         CascadingMenuItem(
           label: 'New File',
           icon: Icons.note_add,
           onTap: () {
-            final snappedPos = viewModel.coords.snapToCellCorner(logicalPosition);
-            _promptCreate(context, viewModel, isDirectory: false, gridPosition: snappedPos, originalLogicalPos: logicalPosition);
+            final snappedPos =
+                viewModel.coords.snapToCellCorner(logicalPosition);
+            _promptCreate(context, viewModel,
+                isDirectory: false,
+                gridPosition: snappedPos,
+                originalLogicalPos: logicalPosition);
           },
         ),
         CascadingMenuItem.divider(),
+        ..._openInTerminalMenuItems(
+          viewModel,
+          workingDirectory: viewModel.currentDirectory,
+        ),
+        CascadingMenuItem.divider(),
+        CascadingMenuItem(
+          label: 'Paste',
+          icon: Icons.paste,
+          flashConfirm: true,
+          onTap: () => _pasteAt(viewModel, logicalPosition),
+        ),
         CascadingMenuItem(
           label: 'Refresh',
           icon: Icons.refresh,
@@ -737,23 +1104,32 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  void _showNodeContextMenu(BuildContext context, Offset position, DesktopViewModel viewModel) {
-    final selectedNodes = viewModel.selectedNodeNames.map((name) => viewModel.nodes.firstWhere((n) => n.name == name)).toList();
+  void _showNodeContextMenu(
+      BuildContext context, Offset position, DesktopViewModel viewModel) {
+    final selectedNodes = viewModel.selectedNodeNames
+        .map((name) => viewModel.nodes.firstWhere((n) => n.name == name))
+        .toList();
     if (selectedNodes.isEmpty) return;
     final node = selectedNodes.first;
     final extension = p.extension(node.name).toLowerCase();
     final isBash = extension == '.sh';
     final isPython = extension == '.py';
-    final isNode = extension == '.js' || extension == '.mjs' || extension == '.cjs' || extension == '.ts';
-    final available = viewModel.appRegistry.where((app) => viewModel.availableApps[app['cmd']] == true).toList();
+    final isNode = extension == '.js' ||
+        extension == '.mjs' ||
+        extension == '.cjs' ||
+        extension == '.ts';
+    final available = viewModel.appRegistry
+        .where((app) => viewModel.availableApps[app['cmd']] == true)
+        .toList();
 
     final items = <CascadingMenuItem>[
       CascadingMenuItem(
         label: 'Open',
         icon: node.isDirectory ? Icons.folder_open : Icons.open_in_new,
         onTap: node.isDirectory
-          ? () => viewModel.loadDirectory(p.join(viewModel.currentDirectory, node.name))
-          : () => viewModel.openSystemDefault(node.name),
+            ? () => viewModel
+                .loadDirectory(p.join(viewModel.currentDirectory, node.name))
+            : () => viewModel.openSystemDefault(node.name),
       ),
       CascadingMenuItem(
         label: 'Open With...',
@@ -766,16 +1142,22 @@ class _DesktopViewState extends State<DesktopView> {
           ),
           if (available.isNotEmpty) CascadingMenuItem.divider(),
           ...available.map((app) => CascadingMenuItem(
-            label: app['name']!,
-            icon: _getIconData(app['icon']!),
-            onTap: () => viewModel.openWith(app['cmd']!, node.name),
-          )),
+                label: app['name']!,
+                icon: _getIconData(app['icon']!),
+                onTap: () => viewModel.openWith(app['cmd']!, node.name),
+              )),
         ],
       ),
+      if (node.isDirectory)
+        ..._openInTerminalMenuItems(
+          viewModel,
+          workingDirectory: viewModel.terminalDirectoryForNode(node),
+        ),
       CascadingMenuItem(
         label: 'Rename',
         icon: Icons.edit,
-        onTap: () => _promptRename(context, viewModel, node, () => Navigator.pop(context)),
+        onTap: () => _promptRename(
+            context, viewModel, node, () => Navigator.pop(context)),
       ),
       if (!node.isDirectory && (isBash || isPython || isNode)) ...[
         CascadingMenuItem.divider(),
@@ -804,7 +1186,8 @@ class _DesktopViewState extends State<DesktopView> {
               CascadingMenuItem(
                 label: 'Capture Output (Dialog)',
                 icon: Icons.output,
-                onTap: () => _runScript(context, viewModel, 'python3', node.name),
+                onTap: () =>
+                    _runScript(context, viewModel, 'python3', node.name),
               ),
               CascadingMenuItem(
                 label: 'Run in Terminal (Interactive)',
@@ -847,29 +1230,48 @@ class _DesktopViewState extends State<DesktopView> {
           ),
           CascadingMenuItem(
             label: 'Green',
-            onTap: () => viewModel.updateNodeColor(node.name, Colors.greenAccent),
+            onTap: () =>
+                viewModel.updateNodeColor(node.name, Colors.greenAccent),
           ),
           CascadingMenuItem(
             label: 'Blue',
-            onTap: () => viewModel.updateNodeColor(node.name, Colors.blueAccent),
+            onTap: () =>
+                viewModel.updateNodeColor(node.name, Colors.blueAccent),
           ),
           CascadingMenuItem(
             label: 'Orange',
-            onTap: () => viewModel.updateNodeColor(node.name, Colors.orangeAccent),
+            onTap: () =>
+                viewModel.updateNodeColor(node.name, Colors.orangeAccent),
           ),
           CascadingMenuItem(
             label: 'Purple',
-            onTap: () => viewModel.updateNodeColor(node.name, Colors.purpleAccent),
+            onTap: () =>
+                viewModel.updateNodeColor(node.name, Colors.purpleAccent),
           ),
           CascadingMenuItem(
             label: 'Pink',
-            onTap: () => viewModel.updateNodeColor(node.name, Colors.pinkAccent),
+            onTap: () =>
+                viewModel.updateNodeColor(node.name, Colors.pinkAccent),
           ),
           CascadingMenuItem(
             label: 'Teal',
-            onTap: () => viewModel.updateNodeColor(node.name, Colors.tealAccent),
+            onTap: () =>
+                viewModel.updateNodeColor(node.name, Colors.tealAccent),
           ),
         ],
+      ),
+      CascadingMenuItem.divider(),
+      CascadingMenuItem(
+        label: 'Copy',
+        icon: Icons.copy,
+        flashConfirm: true,
+        onTap: () => viewModel.copySelection(),
+      ),
+      CascadingMenuItem(
+        label: 'Cut',
+        icon: Icons.content_cut,
+        flashConfirm: true,
+        onTap: () => viewModel.cutSelection(),
       ),
       CascadingMenuItem.divider(),
       CascadingMenuItem(
@@ -888,7 +1290,7 @@ class _DesktopViewState extends State<DesktopView> {
       context,
       position: position,
       onBarrierLeftTapped: (globalPos) {
-        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final canvasPosition = _globalToCanvas(globalPos);
         final nodes = viewModel.nodes.map((node) {
           return HitTestNode(
             id: node.name,
@@ -903,7 +1305,7 @@ class _DesktopViewState extends State<DesktopView> {
         );
       },
       onBarrierRightTapped: (globalPos) {
-        final canvasPosition = globalPos - Offset(0, AppConfig.appBarHeight);
+        final canvasPosition = _globalToCanvas(globalPos);
         final nodes = viewModel.nodes.map((node) {
           return HitTestNode(
             id: node.name,
@@ -923,17 +1325,25 @@ class _DesktopViewState extends State<DesktopView> {
             }
             _showNodeContextMenu(context, globalPos, viewModel);
           case BackgroundClickResult():
-            _showBackgroundContextMenu(context, globalPos, result.logicalPosition, viewModel);
+            _showBackgroundContextMenu(
+                context, globalPos, result.logicalPosition, viewModel);
         }
       },
       onBarrierShiftDragStart: _handleContextMenuShiftDragStart,
       onBarrierShiftDragUpdate: _handleContextMenuShiftDragUpdate,
       onBarrierShiftDragEnd: () => _handleContextMenuShiftDragEnd(viewModel),
+      isSelectionBoxGesture: (event) =>
+          event.buttons & kPrimaryButton != 0 &&
+          viewModel.bindings
+              .isSelectionBoxModifiers(ClickModifiers.fromHardwareKeyboard()),
       items: items,
     );
   }
 
-  Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel, {required bool isDirectory, Offset? gridPosition, Offset? originalLogicalPos}) async {
+  Future<void> _promptCreate(BuildContext context, DesktopViewModel viewModel,
+      {required bool isDirectory,
+      Offset? gridPosition,
+      Offset? originalLogicalPos}) async {
     final controller = TextEditingController();
     final type = isDirectory ? 'Folder' : 'File';
     final colors = Theme.of(context).extension<FileTileColors>()!;
@@ -950,14 +1360,19 @@ class _DesktopViewState extends State<DesktopView> {
           decoration: InputDecoration(
             hintText: 'Enter name',
             hintStyle: TextStyle(color: colors.textDim),
-            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: colors.borderSubtle)),
+            enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: colors.borderSubtle)),
           ),
           onSubmitted: (value) {
             if (value.isNotEmpty) {
               if (isDirectory) {
-                viewModel.createDirectory(value, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
+                viewModel.createDirectory(value,
+                    gridPosition: gridPosition,
+                    originalLogicalPos: originalLogicalPos);
               } else {
-                viewModel.createFile(value, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
+                viewModel.createFile(value,
+                    gridPosition: gridPosition,
+                    originalLogicalPos: originalLogicalPos);
               }
               Navigator.pop(context);
             }
@@ -972,9 +1387,13 @@ class _DesktopViewState extends State<DesktopView> {
             onPressed: () {
               if (controller.text.isNotEmpty) {
                 if (isDirectory) {
-                  viewModel.createDirectory(controller.text, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
+                  viewModel.createDirectory(controller.text,
+                      gridPosition: gridPosition,
+                      originalLogicalPos: originalLogicalPos);
                 } else {
-                  viewModel.createFile(controller.text, gridPosition: gridPosition, originalLogicalPos: originalLogicalPos);
+                  viewModel.createFile(controller.text,
+                      gridPosition: gridPosition,
+                      originalLogicalPos: originalLogicalPos);
                 }
                 Navigator.pop(context);
               }
@@ -986,7 +1405,8 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Future<void> _promptRename(BuildContext context, DesktopViewModel viewModel, DesktopNode node, VoidCallback onConfirm) async {
+  Future<void> _promptRename(BuildContext context, DesktopViewModel viewModel,
+      DesktopNode node, VoidCallback onConfirm) async {
     await Future.delayed(const Duration(milliseconds: 100));
     if (!context.mounted) return;
     final controller = TextEditingController(text: node.name);
@@ -1004,7 +1424,8 @@ class _DesktopViewState extends State<DesktopView> {
           decoration: InputDecoration(
             hintText: 'Enter new name',
             hintStyle: TextStyle(color: colors.textDim),
-            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: colors.borderSubtle)),
+            enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: colors.borderSubtle)),
           ),
           onSubmitted: (value) {
             if (value.isNotEmpty && value != node.name) {
@@ -1034,17 +1455,147 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
+  // Deferred: directory search.
+  // Widget _buildSearchBar(DesktopViewModel viewModel, FileTileColors colors) {
+  //   return Material(
+  //     color: colors.surface,
+  //     child: Column(
+  //       mainAxisSize: MainAxisSize.min,
+  //       children: [
+  //         SizedBox(
+  //           height: 44,
+  //           child: Row(
+  //             children: [
+  //               const SizedBox(width: 12),
+  //               Icon(Icons.search, size: 18, color: colors.textSecondary),
+  //               const SizedBox(width: 8),
+  //               Expanded(
+  //                 child: TextField(
+  //                   controller: _searchController,
+  //                   focusNode: _searchFocusNode,
+  //                   style: TextStyle(color: colors.textPrimary, fontSize: 14),
+  //                   decoration: InputDecoration(
+  //                     hintText: 'Filter this folder…',
+  //                     hintStyle: TextStyle(color: colors.textDim),
+  //                     border: InputBorder.none,
+  //                     isDense: true,
+  //                   ),
+  //                   onChanged: viewModel.setSearchQuery,
+  //                 ),
+  //               ),
+  //               FilterChip(
+  //                 label: const Text('Include nested'),
+  //                 selected: viewModel.searchIncludeNested,
+  //                 onSelected: viewModel.setSearchIncludeNested,
+  //                 visualDensity: VisualDensity.compact,
+  //               ),
+  //               IconButton(
+  //                 icon: const Icon(Icons.close, size: 18),
+  //                 tooltip: 'Close search',
+  //                 onPressed: () {
+  //                   _searchController.clear();
+  //                   viewModel.setSearchQuery('');
+  //                   viewModel.setSearchIncludeNested(false);
+  //                   setState(() => _searchBarOpen = false);
+  //                   _focusNode.requestFocus();
+  //                 },
+  //               ),
+  //             ],
+  //           ),
+  //         ),
+  //         if (viewModel.nestedSearchInProgress ||
+  //             viewModel.nestedSearchHits.isNotEmpty)
+  //           ConstrainedBox(
+  //             constraints: const BoxConstraints(maxHeight: 200),
+  //             child: ListView.builder(
+  //               shrinkWrap: true,
+  //               itemCount: viewModel.nestedSearchHits.length +
+  //                   (viewModel.nestedSearchInProgress ? 1 : 0),
+  //               itemBuilder: (context, index) {
+  //                 if (viewModel.nestedSearchInProgress &&
+  //                     index == viewModel.nestedSearchHits.length) {
+  //                   return Padding(
+  //                     padding: const EdgeInsets.all(8),
+  //                     child: Text('Searching…',
+  //                         style:
+  //                             TextStyle(color: colors.textDim, fontSize: 12)),
+  //                   );
+  //                 }
+  //                 final hit = viewModel.nestedSearchHits[index];
+  //                 return ListTile(
+  //                   dense: true,
+  //                   leading: Icon(
+  //                     hit.isDirectory ? Icons.folder : Icons.description,
+  //                     size: 18,
+  //                     color: colors.textSecondary,
+  //                   ),
+  //                   title: Text(hit.relativePath,
+  //                       style:
+  //                           TextStyle(color: colors.textPrimary, fontSize: 13)),
+  //                   onTap: () => viewModel.openSearchHit(hit),
+  //                 );
+  //               },
+  //             ),
+  //           ),
+  //       ],
+  //     ),
+  //   );
+  // }
+
+  List<CascadingMenuItem> _openInTerminalMenuItems(
+    DesktopViewModel viewModel, {
+    required String workingDirectory,
+  }) {
+    final terminals = viewModel.availableTerminals;
+    if (terminals.length <= 1) {
+      return [
+        CascadingMenuItem(
+          label: 'Open in Terminal',
+          icon: Icons.terminal,
+          onTap: () => viewModel.openInTerminal(
+            workingDirectory: workingDirectory,
+            terminalId: terminals.isEmpty ? null : terminals.first.id,
+          ),
+        ),
+      ];
+    }
+    return [
+      CascadingMenuItem(
+        label: 'Open in Terminal',
+        icon: Icons.terminal,
+        children: terminals
+            .map((app) => CascadingMenuItem(
+                  label: app.id == viewModel.preferredTerminalId
+                      ? '${app.name} (preferred)'
+                      : app.name,
+                  icon: Icons.terminal,
+                  onTap: () => viewModel.openInTerminal(
+                    workingDirectory: workingDirectory,
+                    terminalId: app.id,
+                  ),
+                ))
+            .toList(),
+      ),
+    ];
+  }
+
   IconData _getIconData(String iconName) {
     switch (iconName) {
-      case 'code': return Icons.code;
-      case 'terminal': return Icons.terminal;
-      case 'edit': return Icons.edit;
-      case 'folder_open': return Icons.folder_open;
-      default: return Icons.apps;
+      case 'code':
+        return Icons.code;
+      case 'terminal':
+        return Icons.terminal;
+      case 'edit':
+        return Icons.edit;
+      case 'folder_open':
+        return Icons.folder_open;
+      default:
+        return Icons.apps;
     }
   }
 
-  Future<void> _runScript(BuildContext context, DesktopViewModel viewModel, String tool, String fileName) async {
+  Future<void> _runScript(BuildContext context, DesktopViewModel viewModel,
+      String tool, String fileName) async {
     final colors = Theme.of(context).extension<FileTileColors>()!;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1062,11 +1613,15 @@ class _DesktopViewState extends State<DesktopView> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: colors.surface,
-        title: Text('Result: $fileName ($tool)', style: TextStyle(color: colors.textPrimary, fontSize: 16)),
+        title: Text('Result: $fileName ($tool)',
+            style: TextStyle(color: colors.textPrimary, fontSize: 16)),
         content: SingleChildScrollView(
           child: SelectableText(
             result,
-            style: TextStyle(color: colors.textSecondary, fontFamily: 'monospace', fontSize: 12),
+            style: TextStyle(
+                color: colors.textSecondary,
+                fontFamily: 'monospace',
+                fontSize: 12),
           ),
         ),
         actions: [
@@ -1079,7 +1634,8 @@ class _DesktopViewState extends State<DesktopView> {
     );
   }
 
-  Future<void> _confirmDeleteSelected(BuildContext context, DesktopViewModel viewModel) async {
+  Future<void> _confirmDeleteSelected(
+      BuildContext context, DesktopViewModel viewModel) async {
     await Future.delayed(const Duration(milliseconds: 100));
     if (!context.mounted) return;
 
@@ -1096,7 +1652,8 @@ class _DesktopViewState extends State<DesktopView> {
         backgroundColor: colors.surface,
         title: Text('Delete', style: TextStyle(color: colors.textPrimary)),
         content: SingleChildScrollView(
-          child: Text(deleteMessage, style: TextStyle(color: colors.textSecondary)),
+          child: Text(deleteMessage,
+              style: TextStyle(color: colors.textSecondary)),
         ),
         actions: [
           TextButton(
@@ -1110,7 +1667,35 @@ class _DesktopViewState extends State<DesktopView> {
                 Navigator.pop(context);
               }
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+            child:
+                const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _confirmMetadataBackendSwitch(
+    BuildContext context, {
+    required MetadataBackend from,
+    required MetadataBackend to,
+  }) {
+    final toSqlite = to == MetadataBackend.sqlite;
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(toSqlite ? 'Use local database?' : 'Use JSON files?'),
+        content: Text(toSqlite
+            ? 'Known folder layouts will be copied into a local database. file-tile.json will be removed from those folders where possible.'
+            : 'Layouts will be written back to file-tile.json in each known folder, then removed from the database where that write succeeds.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Switch'),
           ),
         ],
       ),
@@ -1118,117 +1703,389 @@ class _DesktopViewState extends State<DesktopView> {
   }
 
   void _showSettingsModal(BuildContext context, DesktopViewModel viewModel) {
+    ControlAction? capturingAction;
     showDialog(
       context: context,
+      barrierDismissible: true,
       builder: (context) {
-        final colors = Theme.of(context).extension<FileTileColors>()!;
-        return StatefulBuilder(
-          builder: (context, setState) => Dialog(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.33,
-                maxHeight: MediaQuery.of(context).size.height * 0.8,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: Material(
-                  color: colors.surface,
-                  child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Text('Settings', style: TextStyle(color: colors.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
+        return ListenableBuilder(
+          listenable: viewModel,
+          builder: (context, _) {
+            final colors = Theme.of(context).extension<FileTileColors>()!;
+            final switching = viewModel.isSwitchingMetadataBackend;
+            return PopScope(
+              canPop: !switching,
+              child: StatefulBuilder(
+                builder: (context, setState) => Dialog(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: MediaQuery.of(context).size.width * 0.4,
+                      maxHeight: MediaQuery.of(context).size.height * 0.8,
                     ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Appearance
-                              Text('Appearance', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
-                              const SizedBox(height: 12),
-                              SwitchListTile(
-                                title: Text('Dark Mode', style: TextStyle(color: colors.textPrimary)),
-                                value: viewModel.isDarkMode,
-                                onChanged: (value) {
-                                  viewModel.isDarkMode = value;
-                                  setState(() {});
-                                },
-                                activeThumbColor: colors.accent,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Material(
+                        color: colors.surface,
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Text('Settings',
+                                  style: TextStyle(
+                                      color: colors.textPrimary,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold)),
+                            ),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16.0),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      // Appearance
+                                      Text('Appearance',
+                                          style: TextStyle(
+                                              color: colors.textSecondary,
+                                              fontSize: 12)),
+                                      const SizedBox(height: 12),
+                                      SwitchListTile(
+                                        title: Text('Dark Mode',
+                                            style: TextStyle(
+                                                color: colors.textPrimary)),
+                                        value: viewModel.isDarkMode,
+                                        onChanged: (value) {
+                                          viewModel.isDarkMode = value;
+                                          setState(() {});
+                                        },
+                                        activeThumbColor: colors.accent,
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Text('Terminal',
+                                          style: TextStyle(
+                                              color: colors.textSecondary,
+                                              fontSize: 12)),
+                                      const SizedBox(height: 12),
+                                      if (viewModel.availableTerminals.isEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              left: 16, bottom: 8),
+                                          child: Text(
+                                            'No terminal emulator detected',
+                                            style: TextStyle(
+                                                color: colors.textDim),
+                                          ),
+                                        )
+                                      else
+                                        RadioGroup<String>(
+                                          groupValue: viewModel
+                                                  .availableTerminals
+                                                  .any((t) =>
+                                                      t.id ==
+                                                      viewModel
+                                                          .preferredTerminalId)
+                                              ? viewModel.preferredTerminalId
+                                              : viewModel
+                                                  .availableTerminals.first.id,
+                                          onChanged: (value) {
+                                            viewModel.preferredTerminalId =
+                                                value;
+                                            setState(() {});
+                                          },
+                                          child: Column(
+                                            children: [
+                                              for (final app in viewModel
+                                                  .availableTerminals)
+                                                RadioListTile<String>(
+                                                  title: Text(app.name,
+                                                      style: TextStyle(
+                                                          color: colors
+                                                              .textPrimary)),
+                                                  value: app.id,
+                                                  activeColor: colors.accent,
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      const SizedBox(height: 16),
+                                      Text('Layout storage',
+                                          style: TextStyle(
+                                              color: colors.textSecondary,
+                                              fontSize: 12)),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'JSON lives in each folder. The database is stored next to your settings and still works when a folder is not writable.',
+                                        style: TextStyle(
+                                            color: colors.textDim,
+                                            fontSize: 11),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      AbsorbPointer(
+                                        absorbing: switching,
+                                        child: RadioGroup<MetadataBackend>(
+                                          groupValue: viewModel.metadataBackend,
+                                          onChanged: (value) async {
+                                            if (switching || value == null)
+                                              return;
+                                            final confirmed =
+                                                await _confirmMetadataBackendSwitch(
+                                              context,
+                                              from: viewModel.metadataBackend,
+                                              to: value,
+                                            );
+                                            if (confirmed != true) return;
+                                            await viewModel
+                                                .setMetadataBackend(value);
+                                          },
+                                          child: Column(
+                                            children: [
+                                              RadioListTile<MetadataBackend>(
+                                                title: Text(
+                                                    'JSON in each folder',
+                                                    style: TextStyle(
+                                                        color: colors
+                                                            .textPrimary)),
+                                                subtitle: Text('file-tile.json',
+                                                    style: TextStyle(
+                                                        color: colors.textDim,
+                                                        fontSize: 12)),
+                                                value: MetadataBackend.json,
+                                                activeColor: colors.accent,
+                                              ),
+                                              RadioListTile<MetadataBackend>(
+                                                title: Text('Local database',
+                                                    style: TextStyle(
+                                                        color: colors
+                                                            .textPrimary)),
+                                                subtitle: Text(
+                                                    'file-tile-layout.sqlite',
+                                                    style: TextStyle(
+                                                        color: colors.textDim,
+                                                        fontSize: 12)),
+                                                value: MetadataBackend.sqlite,
+                                                activeColor: colors.accent,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      if (switching) ...[
+                                        const SizedBox(height: 8),
+                                        const LinearProgressIndicator(
+                                            minHeight: 2),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'Switching layout storage…',
+                                          style: TextStyle(
+                                              color: colors.textDim,
+                                              fontSize: 12),
+                                        ),
+                                      ],
+                                      const SizedBox(height: 16),
+                                      Text('Controls',
+                                          style: TextStyle(
+                                              color: colors.textSecondary,
+                                              fontSize: 12)),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Click a key binding to rebind. Pointer chords swap if already used.',
+                                        style: TextStyle(
+                                            color: colors.textDim,
+                                            fontSize: 11),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      for (final action in const [
+                                        ControlAction.selectSingle,
+                                        ControlAction.toggleSelect,
+                                        ControlAction.rangeSelect,
+                                        ControlAction.selectionBox,
+                                        ControlAction.delete,
+                                        ControlAction.copy,
+                                        ControlAction.cut,
+                                        ControlAction.paste,
+                                        ControlAction.zoom,
+                                        ControlAction.panVertical,
+                                        ControlAction.panHorizontal,
+                                      ])
+                                        _buildBindingRow(
+                                          colors,
+                                          viewModel,
+                                          action,
+                                          capturingAction,
+                                          (next) => setState(() {
+                                            capturingAction = next;
+                                          }),
+                                        ),
+                                      Align(
+                                        alignment: Alignment.centerRight,
+                                        child: TextButton(
+                                          onPressed: () {
+                                            viewModel.resetBindings();
+                                            setState(
+                                                () => capturingAction = null);
+                                          },
+                                          child: const Text('Reset bindings'),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      _buildControlRow(colors, 'Right Click',
+                                          'Open context menu'),
+                                      _buildControlRow(
+                                          colors, 'Click + Drag', 'Pan canvas'),
+                                      _buildControlRow(colors,
+                                          'Double-Click Folder', 'Open folder'),
+                                      _buildControlRow(
+                                          colors,
+                                          'Double-Click File',
+                                          'Open with system default'),
+                                      const SizedBox(height: 16),
+                                      // Scroll Settings
+                                      Text('Scroll Settings',
+                                          style: TextStyle(
+                                              color: colors.textSecondary,
+                                              fontSize: 12)),
+                                      const SizedBox(height: 12),
+                                      SwitchListTile(
+                                        title: Text('Invert Vertical Scroll',
+                                            style: TextStyle(
+                                                color: colors.textPrimary)),
+                                        value: viewModel.invertVerticalScroll,
+                                        onChanged: (value) {
+                                          viewModel.invertVerticalScroll =
+                                              value;
+                                          setState(() {});
+                                        },
+                                        activeThumbColor: colors.accent,
+                                      ),
+                                      SwitchListTile(
+                                        title: Text('Invert Horizontal Scroll',
+                                            style: TextStyle(
+                                                color: colors.textPrimary)),
+                                        value: viewModel.invertHorizontalScroll,
+                                        onChanged: (value) {
+                                          viewModel.invertHorizontalScroll =
+                                              value;
+                                          setState(() {});
+                                        },
+                                        activeThumbColor: colors.accent,
+                                      ),
+                                      const SizedBox(height: 16),
+                                    ],
+                                  ),
+                                ),
                               ),
-                              const SizedBox(height: 16),
-                              // Selection Controls
-                              Text('Selection Controls', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
-                              const SizedBox(height: 12),
-                              _buildControlRow(colors, 'Left Click', 'Select single node'),
-                              _buildControlRow(colors, 'Ctrl + Click', 'Toggle select node'),
-                              _buildControlRow(colors, 'Shift + Click', 'Range select (rectangular area)'),
-                              _buildControlRow(colors, 'Shift + Drag', 'Selection box (select multiple nodes)'),
-                              _buildControlRow(colors, 'Right Click', 'Open context menu'),
-                              _buildControlRow(colors, 'Delete', 'Delete selected nodes'),
-                              _buildControlRow(colors, 'Double-Click Folder', 'Open folder'),
-                              _buildControlRow(colors, 'Double-Click File', 'Open with system default'),
-                              const SizedBox(height: 16),
-                              // Scroll & Pan Controls
-                              Text('Scroll & Pan Controls', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
-                              const SizedBox(height: 12),
-                              _buildControlRow(colors, 'Scroll', 'Zoom in/out'),
-                              _buildControlRow(colors, 'Shift + Scroll', 'Vertical pan'),
-                              _buildControlRow(colors, 'Ctrl + Scroll', 'Horizontal pan'),
-                              const SizedBox(height: 16),
-                              // Scroll Settings
-                              Text('Scroll Settings', style: TextStyle(color: colors.textSecondary, fontSize: 12)),
-                              const SizedBox(height: 12),
-                              SwitchListTile(
-                                title: Text('Invert Vertical Scroll', style: TextStyle(color: colors.textPrimary)),
-                                value: viewModel.invertVerticalScroll,
-                                onChanged: (value) {
-                                  viewModel.invertVerticalScroll = value;
-                                  setState(() {});
-                                },
-                                activeThumbColor: colors.accent,
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton(
+                                    onPressed: switching
+                                        ? null
+                                        : () => Navigator.pop(context),
+                                    child: const Text('Close'),
+                                  ),
+                                ],
                               ),
-                              SwitchListTile(
-                                title: Text('Invert Horizontal Scroll', style: TextStyle(color: colors.textPrimary)),
-                                value: viewModel.invertHorizontalScroll,
-                                onChanged: (value) {
-                                  viewModel.invertHorizontalScroll = value;
-                                  setState(() {});
-                                },
-                                activeThumbColor: colors.accent,
-                              ),
-                              const SizedBox(height: 16),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Close'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
   }
 
-  Widget _buildControlRow(FileTileColors colors, String control, String description) {
+  Widget _buildBindingRow(
+    FileTileColors colors,
+    DesktopViewModel viewModel,
+    ControlAction action,
+    ControlAction? capturingAction,
+    void Function(ControlAction?) setCapturing,
+  ) {
+    final binding = viewModel.bindings[action];
+    final chords = viewModel.bindings.chordsFor(action);
+    final Widget control;
+    if (chords.isNotEmpty) {
+      control = DropdownButton<PointerChord>(
+        value: binding.pointer != null && chords.contains(binding.pointer)
+            ? binding.pointer
+            : chords.first,
+        dropdownColor: colors.surface,
+        underline: const SizedBox.shrink(),
+        style: TextStyle(color: colors.textPrimary, fontSize: 13),
+        items: [
+          for (final chord in chords)
+            DropdownMenuItem(
+              value: chord,
+              child: Text(chord.label),
+            ),
+        ],
+        onChanged: (chord) {
+          if (chord == null) return;
+          viewModel.rebindControl(action, ControlBinding.pointer(chord));
+          setCapturing(null);
+        },
+      );
+    } else if (capturingAction == action) {
+      control = Focus(
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          if (event.logicalKey == LogicalKeyboardKey.escape) {
+            setCapturing(null);
+            return KeyEventResult.handled;
+          }
+          final chord = KeyChord.fromKeyEvent(event);
+          if (chord.isModifierOnly) return KeyEventResult.ignored;
+          viewModel.rebindControl(action, ControlBinding.key(chord));
+          setCapturing(null);
+          return KeyEventResult.handled;
+        },
+        child: TextButton(
+          onPressed: () => setCapturing(null),
+          child: Text('Press a key…',
+              style: TextStyle(color: colors.accent, fontSize: 13)),
+        ),
+      );
+    } else {
+      control = TextButton(
+        onPressed: () => setCapturing(action),
+        child: Text(binding.label,
+            style: TextStyle(color: colors.textPrimary, fontSize: 13)),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              viewModel.bindings.labelOf(action),
+              style: TextStyle(
+                  color: colors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500),
+            ),
+          ),
+          control,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlRow(
+      FileTileColors colors, String control, String description) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: Row(
@@ -1236,7 +2093,10 @@ class _DesktopViewState extends State<DesktopView> {
         children: [
           Text(
             control,
-            style: TextStyle(color: colors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500),
+            style: TextStyle(
+                color: colors.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w500),
           ),
           Text(
             description,
@@ -1251,13 +2111,13 @@ class _DesktopViewState extends State<DesktopView> {
     final path = viewModel.currentDirectory;
     final parts = p.split(path);
     final List<Widget> widgets = [];
-    _breadcrumbKeys.clear();
+    final livePaths = <String>{};
 
     String currentPath = '';
     if (path.startsWith('/')) {
       currentPath = '/';
-      final key = GlobalKey();
-      _breadcrumbKeys['/'] = key;
+      livePaths.add('/');
+      final key = _breadcrumbKeys.putIfAbsent('/', GlobalKey.new);
       widgets.add(BreadcrumbSegment(
         key: key,
         label: 'Root',
@@ -1272,8 +2132,8 @@ class _DesktopViewState extends State<DesktopView> {
 
       currentPath = p.join(currentPath, part);
       final thisPath = currentPath;
-      final key = GlobalKey();
-      _breadcrumbKeys[thisPath] = key;
+      livePaths.add(thisPath);
+      final key = _breadcrumbKeys.putIfAbsent(thisPath, GlobalKey.new);
       widgets.add(BreadcrumbSegment(
         key: key,
         label: part,
@@ -1283,36 +2143,9 @@ class _DesktopViewState extends State<DesktopView> {
       ));
     }
 
+    _breadcrumbKeys
+        .removeWhere((segmentPath, _) => !livePaths.contains(segmentPath));
     return widgets;
-  }
-
-  /// Hit-test cursor position against directory widgets in the grid.
-  /// Returns the path of the directory if cursor is over one, or null.
-  /// Excludes directories that are currently being dragged.
-  String? _hitTestDirectoryWidget(
-    Offset globalPos,
-    DesktopViewModel viewModel, {
-    Set<String> excludeNodeNames = const {},
-  }) {
-    // Convert global position to canvas position
-    final canvasPos = globalPos - Offset(0, AppConfig.appBarHeight);
-
-    // Test each node to see if cursor is over a directory
-    for (final node in viewModel.nodes) {
-      if (!node.isDirectory) continue;
-      if (excludeNodeNames.contains(node.name)) continue;
-
-      final screenPos = viewModel.coords.logicalToScreen(node.position);
-      final scaledSize = GridConfig.gridCellSize * viewModel.scale;
-      final rect = Rect.fromLTWH(screenPos.dx, screenPos.dy, scaledSize, scaledSize);
-
-      if (rect.contains(canvasPos)) {
-        final targetPath = p.join(viewModel.currentDirectory, node.name);
-        return targetPath;
-      }
-    }
-
-    return null;
   }
 
   /// Hit-test cursor position against breadcrumb widgets.
@@ -1330,7 +2163,8 @@ class _DesktopViewState extends State<DesktopView> {
       // Get the global position and size of the breadcrumb
       final globalOffset = renderBox.localToGlobal(Offset.zero);
       final size = renderBox.size;
-      final rect = Rect.fromLTWH(globalOffset.dx, globalOffset.dy, size.width, size.height);
+      final rect = Rect.fromLTWH(
+          globalOffset.dx, globalOffset.dy, size.width, size.height);
 
       if (rect.contains(globalPos)) {
         return path;
@@ -1340,31 +2174,34 @@ class _DesktopViewState extends State<DesktopView> {
     return null;
   }
 
-  Future<void> _showMoveConflictDialog(
-    BuildContext context,
-    Set<String> nodeNames,
-    String targetPath,
-    List<String> conflictingNames,
-  ) async {
-    final viewModel = context.read<DesktopViewModel>();
-    final nonConflicting = nodeNames.where((n) => !conflictingNames.contains(n)).toList();
+  Future<void> _showNameConflictDialog(
+    BuildContext context, {
+    required Set<String> names,
+    required String targetPath,
+    required List<String> conflictingNames,
+    required Future<void> Function() onSkip,
+  }) async {
+    final nonConflicting =
+        names.where((n) => !conflictingNames.contains(n)).toList();
 
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Move Conflict'),
+        title: const Text('Name Conflict'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${conflictingNames.length} item${conflictingNames.length > 1 ? "s" : ""} already exist${conflictingNames.length > 1 ? "" : "s"} in the destination:'),
+            Text(
+                '${conflictingNames.length} item${conflictingNames.length > 1 ? "s" : ""} already exist${conflictingNames.length > 1 ? "" : "s"} in the destination:'),
             const SizedBox(height: 8),
             Flexible(
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
-                  children: conflictingNames.map((name) => Text('• $name')).toList(),
+                  children:
+                      conflictingNames.map((name) => Text('• $name')).toList(),
                 ),
               ),
             ),
@@ -1379,7 +2216,7 @@ class _DesktopViewState extends State<DesktopView> {
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
-                viewModel.moveNodesToDirectorySkippingConflicts(nodeNames, targetPath);
+                onSkip();
               },
               child: const Text('Skip Conflicts'),
             ),
@@ -1389,7 +2226,91 @@ class _DesktopViewState extends State<DesktopView> {
   }
 }
 
+class _OsCanvasDropAim {
+  final String? folderPath;
+  final String? folderName;
+  final Offset? folderPosition;
+  final Offset? cell;
+
+  const _OsCanvasDropAim.folder({
+    required this.folderPath,
+    required this.folderName,
+    required this.folderPosition,
+  }) : cell = null;
+
+  const _OsCanvasDropAim.cell(this.cell)
+      : folderPath = null,
+        folderName = null,
+        folderPosition = null;
+}
+
 enum _BorderSide { top, right, bottom, left }
+
+class _SwitchingLayoutStorageOverlay extends StatelessWidget {
+  const _SwitchingLayoutStorageOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).extension<FileTileColors>()!;
+    return ColoredBox(
+      color: Colors.black.withValues(alpha: 0.35),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Switching layout storage…',
+                style: TextStyle(color: colors.textPrimary, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LayoutIssueBanner extends StatelessWidget {
+  final DirectoryLayoutIssue issue;
+
+  const _LayoutIssueBanner({required this.issue});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded,
+                size: 18, color: scheme.onErrorContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                issue.message,
+                style: TextStyle(color: scheme.onErrorContainer, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _DesktopNodeWidget extends StatelessWidget {
   final DesktopNode node;
@@ -1398,8 +2319,12 @@ class _DesktopNodeWidget extends StatelessWidget {
   final Color directoryColor;
   final Color fileColor;
   final bool isSelected;
+  // Deferred: directory search.
+  // final bool isSearchMatch;
   final Set<_BorderSide> visibleBorders;
   final bool isDragTarget;
+  final IconData icon;
+  final ui.Image? thumbnail;
 
   const _DesktopNodeWidget({
     required this.node,
@@ -1407,8 +2332,17 @@ class _DesktopNodeWidget extends StatelessWidget {
     required this.gridSize,
     required this.directoryColor,
     required this.fileColor,
+    required this.icon,
+    this.thumbnail,
     this.isSelected = false,
-    this.visibleBorders = const {_BorderSide.top, _BorderSide.right, _BorderSide.bottom, _BorderSide.left},
+    // Deferred: directory search.
+    // this.isSearchMatch = false,
+    this.visibleBorders = const {
+      _BorderSide.top,
+      _BorderSide.right,
+      _BorderSide.bottom,
+      _BorderSide.left
+    },
     this.isDragTarget = false,
   });
 
@@ -1416,38 +2350,46 @@ class _DesktopNodeWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).extension<FileTileColors>()!;
     final size = gridSize * scale;
-    final effectiveColor = node.color ?? (node.isDirectory ? directoryColor : fileColor);
+    final effectiveColor =
+        node.color ?? (node.isDirectory ? directoryColor : fileColor);
 
     final borderColor = isSelected
-      ? effectiveColor.withValues(alpha: 0.8)
-      : colors.nodeBorderDefault;
+        ? effectiveColor.withValues(alpha: 0.8)
+        : colors.nodeBorderDefault;
     final borderWidth = isSelected ? 2.0 : 0.5;
+    // Deferred: directory search highlight.
+    // final borderColor = isSelected || isSearchMatch
+    //     ? (isSearchMatch && !isSelected
+    //         ? colors.accent.withValues(alpha: 0.9)
+    //         : effectiveColor.withValues(alpha: 0.8))
+    //     : colors.nodeBorderDefault;
+    // final borderWidth = isSelected || isSearchMatch ? 2.0 : 0.5;
 
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         color: isDragTarget
-          ? effectiveColor.withValues(alpha: 0.15)
-          : isSelected
             ? effectiveColor.withValues(alpha: 0.15)
-            : colors.nodeBackgroundDefault,
+            : isSelected
+                ? effectiveColor.withValues(alpha: 0.15)
+                : colors.nodeBackgroundDefault,
         border: isDragTarget
-          ? Border.all(color: Colors.transparent)
-          : Border(
-              top: visibleBorders.contains(_BorderSide.top)
-                ? BorderSide(color: borderColor, width: borderWidth)
-                : BorderSide.none,
-              right: visibleBorders.contains(_BorderSide.right)
-                ? BorderSide(color: borderColor, width: borderWidth)
-                : BorderSide.none,
-              bottom: visibleBorders.contains(_BorderSide.bottom)
-                ? BorderSide(color: borderColor, width: borderWidth)
-                : BorderSide.none,
-              left: visibleBorders.contains(_BorderSide.left)
-                ? BorderSide(color: borderColor, width: borderWidth)
-                : BorderSide.none,
-            ),
+            ? Border.all(color: Colors.transparent)
+            : Border(
+                top: visibleBorders.contains(_BorderSide.top)
+                    ? BorderSide(color: borderColor, width: borderWidth)
+                    : BorderSide.none,
+                right: visibleBorders.contains(_BorderSide.right)
+                    ? BorderSide(color: borderColor, width: borderWidth)
+                    : BorderSide.none,
+                bottom: visibleBorders.contains(_BorderSide.bottom)
+                    ? BorderSide(color: borderColor, width: borderWidth)
+                    : BorderSide.none,
+                left: visibleBorders.contains(_BorderSide.left)
+                    ? BorderSide(color: borderColor, width: borderWidth)
+                    : BorderSide.none,
+              ),
       ),
       child: Stack(
         children: [
@@ -1455,11 +2397,24 @@ class _DesktopNodeWidget extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  node.isDirectory ? Icons.folder : Icons.description,
-                  color: effectiveColor,
-                  size: size * 0.45,
-                ),
+                if (thumbnail != null)
+                  SizedBox(
+                    width: size * 0.45,
+                    height: size * 0.45,
+                    child: RepaintBoundary(
+                      child: RawImage(
+                        image: thumbnail,
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.medium,
+                      ),
+                    ),
+                  )
+                else
+                  Icon(
+                    icon,
+                    color: effectiveColor,
+                    size: size * 0.45,
+                  ),
                 SizedBox(height: size * 0.05),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4.0),
@@ -1552,7 +2507,10 @@ class GridPainter extends CustomPainter {
       );
     }
 
-    if (offset.dx >= 0 && offset.dx <= size.width && offset.dy >= 0 && offset.dy <= size.height) {
+    if (offset.dx >= 0 &&
+        offset.dx <= size.width &&
+        offset.dy >= 0 &&
+        offset.dy <= size.height) {
       canvas.drawCircle(offset, 3.0, originPaint);
     }
   }

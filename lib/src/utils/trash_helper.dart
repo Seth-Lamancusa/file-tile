@@ -8,7 +8,8 @@ Future<void> sendToTrash(String filePath) async {
   } else if (Platform.isLinux) {
     await _moveToTrashLinux(filePath);
   } else {
-    throw UnsupportedError('Trash functionality not supported on this platform');
+    throw UnsupportedError(
+        'Trash functionality not supported on this platform');
   }
 }
 
@@ -28,9 +29,9 @@ void _moveToRecycleBinWindows(String filePath) {
     Process.runSync('powershell', [
       '-Command',
       '\$path = "$filePath"; '
-      'if (Test-Path \$path) { '
-      'Remove-Item -Path \$path -Recurse -Force; '
-      '}'
+          'if (Test-Path \$path) { '
+          'Remove-Item -Path \$path -Recurse -Force; '
+          '}'
     ]);
   } catch (e) {
     throw Exception('Failed to move to Recycle Bin: $e');

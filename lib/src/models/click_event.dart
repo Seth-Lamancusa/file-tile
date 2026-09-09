@@ -1,3 +1,5 @@
+import 'dart:ui' show Offset;
+
 import 'package:flutter/services.dart';
 
 /// Encapsulates keyboard modifier state at the moment of a click.
@@ -5,11 +7,13 @@ class ClickModifiers {
   final bool ctrl;
   final bool shift;
   final bool alt;
+  final bool meta;
 
   const ClickModifiers({
     this.ctrl = false,
     this.shift = false,
     this.alt = false,
+    this.meta = false,
   });
 
   /// Factory to extract modifiers from HardwareKeyboard at click time.
@@ -19,6 +23,7 @@ class ClickModifiers {
       ctrl: keyboard.isControlPressed,
       shift: keyboard.isShiftPressed,
       alt: keyboard.isAltPressed,
+      meta: keyboard.isMetaPressed,
     );
   }
 
@@ -29,13 +34,15 @@ class ClickModifiers {
           runtimeType == other.runtimeType &&
           ctrl == other.ctrl &&
           shift == other.shift &&
-          alt == other.alt;
+          alt == other.alt &&
+          meta == other.meta;
 
   @override
-  int get hashCode => Object.hash(ctrl, shift, alt);
+  int get hashCode => Object.hash(ctrl, shift, alt, meta);
 
   @override
-  String toString() => 'ClickModifiers(ctrl: $ctrl, shift: $shift, alt: $alt)';
+  String toString() =>
+      'ClickModifiers(ctrl: $ctrl, shift: $shift, alt: $alt, meta: $meta)';
 }
 
 /// The semantic intent of a click based on modifier state.
@@ -82,21 +89,4 @@ class BackgroundClickResult extends ClickResult {
     required this.action,
     required super.logicalPosition,
   });
-}
-
-/// Maps keyboard modifiers to semantic actions.
-/// Configurable so it can be loaded from saved settings in the future.
-class ClickActionMapper {
-  /// The mapping from modifier combination to action.
-  /// Future: load this from config instead of hardcoding.
-  static ClickAction mapModifiersToAction(ClickModifiers modifiers) {
-    if (modifiers.ctrl && !modifiers.shift && !modifiers.alt) {
-      return ClickAction.toggleSelect;
-    } else if (modifiers.shift && !modifiers.ctrl && !modifiers.alt) {
-      return ClickAction.rangeSelect;
-    } else if (!modifiers.ctrl && !modifiers.shift && !modifiers.alt) {
-      return ClickAction.selectSingle;
-    }
-    return ClickAction.noOp;
-  }
 }

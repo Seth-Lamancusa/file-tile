@@ -1,3 +1,5 @@
+import '../models/directory_layout_issue.dart';
+import '../models/metadata_backend.dart';
 import '../models/new_element_placement_config.dart';
 
 /// A directory entry as seen by [DesktopRepository].
@@ -6,7 +8,8 @@ class DesktopEntity {
   final bool isDirectory;
   final bool isSymlink;
 
-  DesktopEntity({required this.name, required this.isDirectory, this.isSymlink = false});
+  DesktopEntity(
+      {required this.name, required this.isDirectory, this.isSymlink = false});
 }
 
 /// Abstraction over the filesystem access `DesktopViewModel` needs.
@@ -38,6 +41,20 @@ abstract class DesktopRepository {
   /// Rename/move the file or directory at [oldPath] to [newPath].
   /// No-ops if nothing exists at [oldPath].
   Future<void> rename(String oldPath, String newPath);
+
+  /// Recursively copy a file or directory from [sourcePath] to [destPath].
+  /// [destPath] must not already exist.
+  Future<void> copyEntry(String sourcePath, String destPath);
+
+  /// Preferred layout backend from `metadata_backend` (default json).
+  MetadataBackend get metadataBackend;
+
+  /// Switch layout backend: copy known dirs into the new store, then
+  /// best-effort wipe the old store. Failed wipes stay as leftovers.
+  Future<void> setMetadataBackend(MetadataBackend backend);
+
+  /// Soft warning from the last layout read/write for [path] (leftover store).
+  DirectoryLayoutIssue? takeLayoutWarning(String path);
 
   /// Read the app-wide config. Returns an empty map if none exists yet.
   Future<Map<String, dynamic>> readConfig();
@@ -72,5 +89,6 @@ abstract class DesktopRepository {
   Future<NewElementPlacementConfig> readNewElementPlacementConfig(String path);
 
   /// Update the new element placement configuration for the directory at [path].
-  Future<void> updateNewElementPlacementConfig(String path, NewElementPlacementConfig config);
+  Future<void> updateNewElementPlacementConfig(
+      String path, NewElementPlacementConfig config);
 }

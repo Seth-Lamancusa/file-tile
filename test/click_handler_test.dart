@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:file_tile/src/controllers/click_handler.dart';
 import 'package:file_tile/src/controllers/selection_controller.dart';
+import 'package:file_tile/src/models/binding_map.dart';
 import 'package:file_tile/src/models/click_event.dart';
 import 'package:file_tile/src/utils/coordinate_space.dart';
 
@@ -87,7 +88,8 @@ void main() {
 
       // Simulate Shift+click on node4 (would trigger rangeSelect in real code)
       selectionController.rangeSelect(['node1', 'node2', 'node3', 'node4']);
-      expect(selectionController.selected, {'node1', 'node2', 'node3', 'node4'});
+      expect(
+          selectionController.selected, {'node1', 'node2', 'node3', 'node4'});
     });
 
     test('toggleSelect adds and removes nodes', () {
@@ -201,25 +203,25 @@ void main() {
     });
   });
 
-  group('ClickActionMapper', () {
+  group('BindingMap click mapping', () {
     test('maps plain click to selectSingle', () {
       final mods = ClickModifiers(ctrl: false, shift: false, alt: false);
-      expect(ClickActionMapper.mapModifiersToAction(mods), ClickAction.selectSingle);
+      expect(BindingMap.defaults.resolveClick(mods), ClickAction.selectSingle);
     });
 
     test('maps Ctrl+click to toggleSelect', () {
       final mods = ClickModifiers(ctrl: true, shift: false, alt: false);
-      expect(ClickActionMapper.mapModifiersToAction(mods), ClickAction.toggleSelect);
+      expect(BindingMap.defaults.resolveClick(mods), ClickAction.toggleSelect);
     });
 
     test('maps Shift+click to rangeSelect', () {
       final mods = ClickModifiers(ctrl: false, shift: true, alt: false);
-      expect(ClickActionMapper.mapModifiersToAction(mods), ClickAction.rangeSelect);
+      expect(BindingMap.defaults.resolveClick(mods), ClickAction.rangeSelect);
     });
 
     test('maps unsupported modifiers to noOp', () {
       final mods = ClickModifiers(ctrl: true, shift: true, alt: false);
-      expect(ClickActionMapper.mapModifiersToAction(mods), ClickAction.noOp);
+      expect(BindingMap.defaults.resolveClick(mods), ClickAction.noOp);
     });
   });
 }

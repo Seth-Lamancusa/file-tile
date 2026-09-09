@@ -33,11 +33,14 @@ class PlacementRegionPainter extends CustomPainter {
         final cellLogicalY = config.anchorRow > 0
             ? (config.anchorRow - 1) * gridSize
             : config.anchorRow * gridSize;
-        final cellScreenPos = coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
+        final cellScreenPos =
+            coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
 
         final cellSize = coords.renderedGridCellSize;
-        final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-        canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: baseOpacity));
+        final rect = Rect.fromLTWH(
+            cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
+        canvas.drawRect(
+            rect, Paint()..color = regionColor.withValues(alpha: baseOpacity));
       }
 
       // Draw unconstrained direction cells (vertical with fade)
@@ -65,11 +68,14 @@ class PlacementRegionPainter extends CustomPainter {
 
           final cellLogicalX = col > 0 ? (col - 1) * gridSize : col * gridSize;
           final cellLogicalY = row > 0 ? (row - 1) * gridSize : row * gridSize;
-          final cellScreenPos = coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
+          final cellScreenPos =
+              coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
 
           final cellSize = coords.renderedGridCellSize;
-          final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-          canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: opacity));
+          final rect = Rect.fromLTWH(
+              cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
+          canvas.drawRect(
+              rect, Paint()..color = regionColor.withValues(alpha: opacity));
         }
       }
     } else {
@@ -83,11 +89,14 @@ class PlacementRegionPainter extends CustomPainter {
             ? (config.anchorCol - 1) * gridSize
             : config.anchorCol * gridSize;
         final cellLogicalY = row > 0 ? (row - 1) * gridSize : row * gridSize;
-        final cellScreenPos = coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
+        final cellScreenPos =
+            coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
 
         final cellSize = coords.renderedGridCellSize;
-        final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-        canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: baseOpacity));
+        final rect = Rect.fromLTWH(
+            cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
+        canvas.drawRect(
+            rect, Paint()..color = regionColor.withValues(alpha: baseOpacity));
       }
 
       // Draw unconstrained direction cells (horizontal with fade)
@@ -115,11 +124,14 @@ class PlacementRegionPainter extends CustomPainter {
 
           final cellLogicalX = col > 0 ? (col - 1) * gridSize : col * gridSize;
           final cellLogicalY = row > 0 ? (row - 1) * gridSize : row * gridSize;
-          final cellScreenPos = coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
+          final cellScreenPos =
+              coords.logicalToScreen(Offset(cellLogicalX, cellLogicalY));
 
           final cellSize = coords.renderedGridCellSize;
-          final rect = Rect.fromLTWH(cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
-          canvas.drawRect(rect, Paint()..color = regionColor.withValues(alpha: opacity));
+          final rect = Rect.fromLTWH(
+              cellScreenPos.dx, cellScreenPos.dy, cellSize, cellSize);
+          canvas.drawRect(
+              rect, Paint()..color = regionColor.withValues(alpha: opacity));
         }
       }
     }

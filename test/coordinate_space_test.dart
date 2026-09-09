@@ -25,7 +25,9 @@ void main() {
       expect(logicalPos.dy, 0.0);
     });
 
-    test('screenToLogical at (200, 400) with pan (100, 200) and zoom 2x gives (50, 100)', () {
+    test(
+        'screenToLogical at (200, 400) with pan (100, 200) and zoom 2x gives (50, 100)',
+        () {
       const cs = CoordinateSpace(scale: 2.0, panOffset: Offset(100, 200));
       final logicalPos = cs.screenToLogical(const Offset(200, 400));
 
@@ -59,7 +61,8 @@ void main() {
       expect(xNeg1b, -1);
       expect(yNeg2, -1);
 
-      final (xNeg2, yNeg2b) = cs.logicalPosToGridIndices(const Offset(-81, -100));
+      final (xNeg2, yNeg2b) =
+          cs.logicalPosToGridIndices(const Offset(-81, -100));
       expect(xNeg2, -2);
       expect(yNeg2b, -2);
     });
@@ -86,7 +89,8 @@ void main() {
       );
     });
 
-    test('snapToCellCorner snaps to cell lower-bound corner (grid-aligned)', () {
+    test('snapToCellCorner snaps to cell lower-bound corner (grid-aligned)',
+        () {
       const cs = CoordinateSpace(scale: 1.0, panOffset: Offset.zero);
 
       // Position (40, 50) is in cell (1, 1) [0, 80) → corner at (0, 0)
