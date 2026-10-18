@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-18
+
 Feature waves scoped 2026-09-08 (Waves 1–4). Linux is the primary target; macOS and Windows support for terminal, clipboard, and drag is best-effort.
 
 ### Added
@@ -18,6 +20,10 @@ Feature waves scoped 2026-09-08 (Waves 1–4). Linux is the primary target; macO
 - File-type Material icons, plus raster thumbnails (`jpg`, `png`, `gif`, `webp`, `bmp`) for visible cells. Bytes are read off the UI isolate; decode uses the engine codec with a target width.
 - Native OS drag into and out of the window. Drop on empty canvas, a folder tile, or a breadcrumb. Default drop is a **move**; hold Ctrl to copy. Incoming GNOME `copy`/`cut` verbs still win. Hover shows a dotted destination overlay.
 - Optional sqlite layout storage (`metadata_backend: json | sqlite`, default JSON). Positions and new-element placement can live in `file-tile-layout.sqlite` next to config, so unwritable folders can still keep a layout. Switching backends copy-then-wipes known directories only (never walks `$HOME`). If the preferred store fails, a leftover store is used and a fallback banner is shown.
+- Undo and redo (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`) for creates, moves, and deletes. Delete sends the item to the trash, and undo puts it back.
+- New symlink from the canvas menu, using the system file picker to choose the target.
+- AppImage self-update from GitHub Releases. On startup a packaged build asks before installing a delta update, then offers to restart.
+- Canvas edge auto-scroll while dragging, and multi-file drops that keep each file on the cell relative to the pointer.
 
 ### Changed
 

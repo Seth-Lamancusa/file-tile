@@ -156,7 +156,7 @@ Use that script instead of calling `flutter_distributor` directly. It puts a sma
 
 The build machine also needs the real `appimagetool` on `PATH`, and `zsync` (`sudo apt install zsync`) so `zsyncmake` can write a `.zsync` file next to the AppImage. Without `zsync`, the AppImage still builds, but clients cannot delta-update to it.
 
-Output lands in `dist/<version>/`, for example `dist/0.1.0/file_tile-0.1.0-linux.AppImage` and `file_tile-0.1.0-linux.AppImage.zsync`.
+Output lands in `dist/<version>/`, for example `dist/0.1.1/file_tile-0.1.1-linux.AppImage` and `file_tile-0.1.1-linux.AppImage.zsync`.
 
 ### Self-update
 
@@ -188,7 +188,7 @@ gh auth login
 linux/packaging/appimage/publish_github.sh
 ```
 
-`publish_github.sh` packages, then uploads both the `.AppImage` and the `.AppImage.zsync` to the release tagged `v<version>` from `pubspec.yaml` (currently `v0.1.0`). If that release already exists, the two assets are replaced. Pass `--skip-build` to upload files already in `dist/<version>/`.
+`publish_github.sh` packages, then uploads both the `.AppImage` and the `.AppImage.zsync` to the release tagged `v<version>` from `pubspec.yaml` (currently `v0.1.1`). If that release already exists, the two assets are replaced. Pass `--skip-build` to upload files already in `dist/<version>/`.
 
 The first published AppImage is the baseline. The update dialog appears after a newer release is published with both assets. An AppImage built before the update string was embedded cannot update itself.
 
