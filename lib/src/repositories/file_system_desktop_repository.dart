@@ -9,6 +9,7 @@ import '../storage/layout_database.dart';
 import '../storage/sqlite_layout_store.dart';
 import '../utils/config_manager.dart';
 import '../utils/layout_directory_key.dart';
+import '../models/trash_token.dart';
 import '../utils/trash_helper.dart';
 import 'desktop_repository.dart';
 
@@ -212,10 +213,16 @@ class FileSystemDesktopRepository implements DesktopRepository {
         isDir = type == FileSystemEntityType.directory;
       }
 
+      DateTime? modified;
+      try {
+        modified = e.statSync().modified;
+      } catch (_) {}
+
       return DesktopEntity(
         name: p.basename(e.path),
         isDirectory: isDir,
         isSymlink: isSymlink,
+        modified: modified,
       );
     }).toList();
   }
@@ -237,13 +244,24 @@ class FileSystemDesktopRepository implements DesktopRepository {
   }
 
   @override
-  Future<void> delete(String path) async {
-    if (await File(path).exists() || await Directory(path).exists()) {
-      await sendToTrash(path);
-    } else {
+  Future<bool> createSymlink(String path, String target) async {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type != FileSystemEntityType.notFound) return false;
+    await Link(path).create(target);
+    return true;
+  }
+
+  @override
+  Future<TrashToken?> delete(String path) async {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) {
       throw FileSystemException('Path does not exist', path);
     }
+    return sendToTrash(path);
   }
+
+  @override
+  Future<void> restore(TrashToken token) => restoreFromTrash(token);
 
   @override
   Future<void> rename(String oldPath, String newPath) async {
@@ -378,19 +396,22 @@ class FileSystemDesktopRepository implements DesktopRepository {
   @override
   Future<void> removeFromLayout(String path, String name) async {
     final key = layoutDirectoryKey(path);
-    await _mutate(key, json: () => _json.removeNode(key, name), sqlite: () async {
-      await (await _requireSqlite()).removeNode(key, name);
-    });
+    await _mutate(key,
+        json: () => _json.removeNode(key, name),
+        sqlite: () async {
+          await (await _requireSqlite()).removeNode(key, name);
+        });
   }
 
   @override
   Future<void> renameInLayout(
       String path, String oldName, String newName) async {
     final key = layoutDirectoryKey(path);
-    await _mutate(key, json: () => _json.renameNode(key, oldName, newName),
+    await _mutate(key,
+        json: () => _json.renameNode(key, oldName, newName),
         sqlite: () async {
-      await (await _requireSqlite()).renameNode(key, oldName, newName);
-    });
+          await (await _requireSqlite()).renameNode(key, oldName, newName);
+        });
   }
 
   @override

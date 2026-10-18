@@ -80,6 +80,21 @@ void main() {
       map.resolveKey(LogicalKeyboardKey.keyC, const ClickModifiers()),
       isNull,
     );
+    expect(
+      map.resolveKey(LogicalKeyboardKey.keyZ, const ClickModifiers(ctrl: true)),
+      ControlAction.undo,
+    );
+    expect(
+      map.resolveKey(
+        LogicalKeyboardKey.keyZ,
+        const ClickModifiers(ctrl: true, shift: true),
+      ),
+      ControlAction.redo,
+    );
+    expect(
+      map.resolveKey(LogicalKeyboardKey.keyZ, const ClickModifiers(shift: true)),
+      isNull,
+    );
   });
 
   test('round-trips through JSON', () {

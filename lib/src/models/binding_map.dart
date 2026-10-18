@@ -13,6 +13,8 @@ enum ControlAction {
   copy,
   cut,
   paste,
+  undo,
+  redo,
   zoom,
   panVertical,
   panHorizontal,
@@ -325,6 +327,19 @@ class BindingMap {
         shortcut: true,
       ),
     ),
+    ControlAction.undo: ControlBinding.key(
+      KeyChord(
+        logicalKeyId: LogicalKeyboardKey.keyZ.keyId,
+        shortcut: true,
+      ),
+    ),
+    ControlAction.redo: ControlBinding.key(
+      KeyChord(
+        logicalKeyId: LogicalKeyboardKey.keyZ.keyId,
+        shortcut: true,
+        shift: true,
+      ),
+    ),
     ControlAction.zoom: const ControlBinding.pointer(PointerChord.scroll),
     ControlAction.panVertical:
         const ControlBinding.pointer(PointerChord.shiftScroll),
@@ -426,6 +441,8 @@ class BindingMap {
       ControlAction.copy,
       ControlAction.cut,
       ControlAction.paste,
+      ControlAction.undo,
+      ControlAction.redo,
     ]) {
       final chord = this[action].key;
       if (chord != null && chord.matches(key, modifiers: modifiers)) {
@@ -467,6 +484,8 @@ class BindingMap {
       case ControlAction.copy:
       case ControlAction.cut:
       case ControlAction.paste:
+      case ControlAction.undo:
+      case ControlAction.redo:
         return const [];
     }
   }
@@ -489,6 +508,10 @@ class BindingMap {
         return 'Cut';
       case ControlAction.paste:
         return 'Paste';
+      case ControlAction.undo:
+        return 'Undo';
+      case ControlAction.redo:
+        return 'Redo';
       case ControlAction.zoom:
         return 'Zoom';
       case ControlAction.panVertical:

@@ -1,6 +1,36 @@
 import 'package:flutter/material.dart';
 import '../viewmodels/desktop_viewmodel.dart';
 
+/// Sides of a grid cell that form the outer edge of a region.
+enum CellOutlineSide { top, right, bottom, left }
+
+/// Sides of [cell] that are not shared with another cell in [cells].
+/// Adjacent cells drop the shared edge so a region reads as one outline.
+/// Cells that do not touch keep a full outline, so the region may be disjoint.
+Set<CellOutlineSide> outerCellOutlineSides(
+  Offset cell,
+  Iterable<Offset> cells,
+  double cellSize,
+) {
+  final sides = CellOutlineSide.values.toSet();
+  for (final other in cells) {
+    if (other == cell) continue;
+    final dx = other.dx - cell.dx;
+    final dy = other.dy - cell.dy;
+    const tolerance = 1.0;
+    if ((dy + cellSize).abs() < tolerance && dx.abs() < tolerance) {
+      sides.remove(CellOutlineSide.top);
+    } else if ((dx - cellSize).abs() < tolerance && dy.abs() < tolerance) {
+      sides.remove(CellOutlineSide.right);
+    } else if ((dy - cellSize).abs() < tolerance && dx.abs() < tolerance) {
+      sides.remove(CellOutlineSide.bottom);
+    } else if ((dx + cellSize).abs() < tolerance && dy.abs() < tolerance) {
+      sides.remove(CellOutlineSide.left);
+    }
+  }
+  return sides;
+}
+
 /// Check if a single position is available (not occupied).
 bool isPositionAvailable(Offset position, Set<Offset> occupiedPositions) {
   return !occupiedPositions.contains(position);

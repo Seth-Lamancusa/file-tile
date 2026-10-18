@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 import 'package:file_tile/src/models/new_element_placement_config.dart';
 import 'package:file_tile/src/models/directory_layout_issue.dart';
 import 'package:file_tile/src/models/metadata_backend.dart';
+import 'package:file_tile/src/models/trash_token.dart';
 import 'package:file_tile/src/repositories/desktop_repository.dart';
 
 /// In-memory [DesktopRepository] for tests. No real file I/O.
@@ -24,6 +25,12 @@ class FakeDesktopRepository implements DesktopRepository {
 
   Object? listEntitiesError;
   String? listEntitiesErrorPath;
+
+  /// Link path → target, recorded by [createSymlink].
+  final Map<String, String> symlinkTargets = {};
+
+  int _nextTrashId = 0;
+  final Map<String, _TrashedEntry> _trash = {};
 
   @override
   MetadataBackend metadataBackend = MetadataBackend.json;
@@ -78,17 +85,94 @@ class FakeDesktopRepository implements DesktopRepository {
   }
 
   @override
-  Future<void> delete(String path) async {
+  Future<bool> createSymlink(String path, String target) async {
+    final dir = p.dirname(path);
+    final name = p.basename(path);
+    final list = _children.putIfAbsent(dir, () => []);
+    if (list.any((e) => e.name == name)) return false;
+    list.add(DesktopEntity(name: name, isDirectory: false, isSymlink: true));
+    symlinkTargets[path] = target;
+    return true;
+  }
+
+  @override
+  Future<TrashToken?> delete(String path) async {
     final dir = p.dirname(path);
     final name = p.basename(path);
     final list = _children[dir];
     if (list == null || !list.any((e) => e.name == name)) {
       throw Exception('Path does not exist: $path');
     }
+    final entity = list.firstWhere((e) => e.name == name);
     list.removeWhere((e) => e.name == name);
+    final record = _TrashedEntry(entity);
+    final ownLink = symlinkTargets.remove(path);
+    if (ownLink != null) record.symlinkTarget = ownLink;
+    if (entity.isDirectory) _takeTree(path, record);
+    final id = _nextTrashId++;
+    final trashedPath = 'trash://$id/$name';
+    _trash[trashedPath] = record;
+    return TrashToken(
+      originalPath: path,
+      trashedPath: trashedPath,
+      infoPath: 'trash://$id/$name.trashinfo',
+    );
+  }
+
+  @override
+  Future<void> restore(TrashToken token) async {
+    final record = _trash.remove(token.trashedPath);
+    if (record == null) {
+      throw Exception('Trash entry is gone');
+    }
+    final dir = p.dirname(token.originalPath);
+    final name = p.basename(token.originalPath);
+    if (!_directories.contains(dir)) {
+      _trash[token.trashedPath] = record;
+      throw Exception('Original directory is gone');
+    }
+    final list = _children.putIfAbsent(dir, () => []);
+    if (list.any((e) => e.name == name)) {
+      _trash[token.trashedPath] = record;
+      throw Exception('Path already exists');
+    }
+    list.add(DesktopEntity(
+      name: name,
+      isDirectory: record.entity.isDirectory,
+      isSymlink: record.entity.isSymlink,
+      modified: record.entity.modified,
+    ));
+    if (record.symlinkTarget != null) {
+      symlinkTargets[token.originalPath] = record.symlinkTarget!;
+    }
+    if (record.entity.isDirectory) {
+      _directories.add(token.originalPath);
+      record.childrenByPath.forEach((path, kids) {
+        _directories.add(path);
+        _children[path] = kids;
+      });
+      record.layoutsByPath.forEach((path, layout) {
+        _layouts[path] = layout;
+      });
+      record.symlinkTargets.forEach((path, target) {
+        symlinkTargets[path] = target;
+      });
+    }
+  }
+
+  void _takeTree(String path, _TrashedEntry record) {
     _directories.remove(path);
-    _children.remove(path);
-    _layouts.remove(path);
+    final layout = _layouts.remove(path);
+    if (layout != null) record.layoutsByPath[path] = layout;
+    final kids = _children.remove(path);
+    if (kids == null) return;
+    record.childrenByPath[path] = kids;
+    for (final child in kids) {
+      final childPath = p.join(path, child.name);
+      final target = symlinkTargets.remove(childPath);
+      if (target != null) record.symlinkTargets[childPath] = target;
+      if (child.isDirectory) _takeTree(childPath, record);
+    }
   }
 
   @override
@@ -108,6 +192,7 @@ class FakeDesktopRepository implements DesktopRepository {
       name: newName,
       isDirectory: old.isDirectory,
       isSymlink: old.isSymlink,
+      modified: old.modified,
     ));
     if (old.isDirectory) {
       _relocateTree(oldPath, newPath, copy: false);
@@ -133,6 +218,7 @@ class FakeDesktopRepository implements DesktopRepository {
       name: destName,
       isDirectory: entity.isDirectory,
       isSymlink: entity.isSymlink,
+      modified: entity.modified,
     ));
     if (entity.isDirectory) {
       _relocateTree(sourcePath, destPath, copy: true);
@@ -157,6 +243,7 @@ class FakeDesktopRepository implements DesktopRepository {
           name: e.name,
           isDirectory: e.isDirectory,
           isSymlink: e.isSymlink,
+          modified: e.modified,
         )
     ];
     for (final e in kids) {
@@ -249,4 +336,14 @@ class FakeDesktopRepository implements DesktopRepository {
       String path, NewElementPlacementConfig config) async {
     // No-op for fake repository
   }
+}
+
+class _TrashedEntry {
+  final DesktopEntity entity;
+  String? symlinkTarget;
+  final Map<String, List<DesktopEntity>> childrenByPath = {};
+  final Map<String, Map<String, dynamic>> layoutsByPath = {};
+  final Map<String, String> symlinkTargets = {};
+
+  _TrashedEntry(this.entity);
 }

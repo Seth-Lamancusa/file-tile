@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import '../controllers/selection_controller.dart';
 import '../models/new_element_placement_config.dart';
 import '../models/binding_map.dart';
+import '../models/edit_history.dart';
+import '../models/trash_token.dart';
 import '../models/directory_layout_issue.dart';
 import '../models/metadata_backend.dart';
 import '../repositories/desktop_repository.dart';
@@ -15,6 +17,7 @@ import '../utils/grid_position.dart';
 import '../utils/io_errors.dart';
 import '../utils/metadata_helper.dart';
 import '../utils/os_file_clipboard.dart';
+import '../utils/os_file_drop.dart';
 import '../utils/terminal_launcher.dart';
 import '../utils/thumbnail_cache.dart';
 
@@ -25,6 +28,44 @@ enum DesktopSelectAction {
   openInTerminal,
   copy,
   cut,
+}
+
+/// How an in-app drag of tiles already in the open folder would land.
+enum InAppCanvasDropKind { intoDirectory, reposition, blocked }
+
+class InAppCanvasDrop {
+  final InAppCanvasDropKind kind;
+  final String? directoryPath;
+  final String? directoryName;
+  final Offset? directoryPosition;
+
+  /// Source basename → landing cell. Empty unless [kind] is reposition.
+  final Map<String, Offset> placements;
+  final String? anchorName;
+
+  const InAppCanvasDrop.intoDirectory({
+    required this.directoryPath,
+    required this.directoryName,
+    required this.directoryPosition,
+  })  : kind = InAppCanvasDropKind.intoDirectory,
+        placements = const {},
+        anchorName = null;
+
+  const InAppCanvasDrop.reposition({
+    required this.placements,
+    required this.anchorName,
+  })  : kind = InAppCanvasDropKind.reposition,
+        directoryPath = null,
+        directoryName = null,
+        directoryPosition = null;
+
+  const InAppCanvasDrop.blocked()
+      : kind = InAppCanvasDropKind.blocked,
+        directoryPath = null,
+        directoryName = null,
+        directoryPosition = null,
+        placements = const {},
+        anchorName = null;
 }
 
 /// Exception thrown when moving nodes results in naming conflicts.
@@ -107,6 +148,8 @@ class DesktopNode {
       };
 }
 
+enum _HistoryApply { applied, rejected, forgotten }
+
 class DesktopViewModel extends ChangeNotifier {
   final DesktopRepository _repository;
   final SelectionController _selectionController = SelectionController();
@@ -145,6 +188,7 @@ class DesktopViewModel extends ChangeNotifier {
 
   final List<String> _history = [];
   final List<String> _forwardHistory = [];
+  final EditHistory _edits = EditHistory();
 
   // Drag state for collision detection and revert on collision
   final Map<String, Offset> _dragStartPositions = {};
@@ -165,10 +209,10 @@ class DesktopViewModel extends ChangeNotifier {
   // background reload can never clobber in-progress, unsaved UI state.
   bool _isInteracting = false;
 
-  // Every disk-touching operation (load/create/delete/rename/move/poll) runs
-  // through this chain so at most one is ever in flight. A newer operation
-  // simply awaits the previous one instead of racing it - no request tokens
-  // or cancellation needed.
+  // Every disk-touching operation (load/create/delete/rename/move/undo/poll)
+  // runs through this chain so at most one is ever in flight. A newer
+  // operation simply awaits the previous one instead of racing it - no
+  // request tokens or cancellation needed.
   Future<void> _operationChain = Future.value();
 
   Future<T> _runExclusive<T>(Future<T> Function() operation) {
@@ -337,6 +381,8 @@ class DesktopViewModel extends ChangeNotifier {
 
   bool get canGoBack => _history.isNotEmpty;
   bool get canGoForward => _forwardHistory.isNotEmpty;
+  bool get canUndo => _edits.canUndo;
+  bool get canRedo => _edits.canRedo;
 
   DesktopViewModel({
     DesktopRepository? repository,
@@ -716,6 +762,17 @@ class DesktopViewModel extends ChangeNotifier {
         }
       }
 
+      // First placement into the inbox only. Items that already have a saved
+      // position stay put. Oldest modification time takes the anchor cell;
+      // newer items continue along the placement region. Equal times break
+      // by name so the layout does not depend on directory iteration order.
+      unpositionedEntities.sort((a, b) {
+        final byTime = (a.modified ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(b.modified ?? DateTime.fromMillisecondsSinceEpoch(0));
+        if (byTime != 0) return byTime;
+        return a.name.compareTo(b.name);
+      });
+
       for (var e in unpositionedEntities) {
         final name = e.name;
 
@@ -802,21 +859,34 @@ class DesktopViewModel extends ChangeNotifier {
 
   Future<void> snapNodeToGrid(String name) {
     return _runExclusive(() async {
+      final before = _findNode(name)?.toJson();
       if (_replaceNode(
           name,
           (n) =>
               n.copyWith(position: coords.snapToNearestGridCell(n.position)))) {
         notifyListeners();
         await _saveMetadata();
+        final after = _findNode(name)?.toJson();
+        if (before != null && after != null) {
+          _recordLayoutChange(
+              _currentDirectory, {name: before}, {name: after});
+        }
       }
     });
   }
 
   Future<void> updateNodeColor(String name, Color? color) {
     return _runExclusive(() async {
+      final before = _findNode(name)?.toJson();
+      if (before == null) return;
       if (_replaceNode(name, (n) => n.copyWith(color: color))) {
         notifyListeners();
         await _saveMetadata();
+        final after = _findNode(name)?.toJson();
+        if (after != null) {
+          _recordLayoutChange(
+              _currentDirectory, {name: before}, {name: after});
+        }
       }
     });
   }
@@ -834,6 +904,7 @@ class DesktopViewModel extends ChangeNotifier {
             await _saveMetadata();
           }
         }
+        _rememberNewNode(name);
       }
     });
   }
@@ -851,34 +922,45 @@ class DesktopViewModel extends ChangeNotifier {
             await _saveMetadata();
           }
         }
+        _rememberNewNode(name);
       }
+    });
+  }
+
+  Future<void> createSymlink(String name, String target,
+      {Offset? gridPosition, Offset? originalLogicalPos}) {
+    return _runExclusive(() async {
+      final linkPath = p.join(_currentDirectory, name);
+      try {
+        final created = await _repository.createSymlink(linkPath, target);
+        if (!created) {
+          _setError("Couldn't create symlink $name");
+          return;
+        }
+      } catch (e) {
+        debugPrint('Error creating symlink: $e');
+        _setError("Couldn't create symlink $name");
+        return;
+      }
+
+      await _loadDirectoryImpl(_currentDirectory,
+          addToHistory: false, force: true);
+      if (gridPosition != null) {
+        if (_replaceNode(name, (n) => n.copyWith(position: gridPosition))) {
+          await _saveMetadata();
+        }
+      }
+      _rememberNewNode(name);
     });
   }
 
   Future<void> deleteNode(String name) {
     return _runExclusive(() async {
-      final path = p.join(_currentDirectory, name);
-      try {
-        await _repository.delete(path);
-        debugPrint('Deleted: $path');
-      } catch (e) {
-        debugPrint('Error deleting: $e');
-        _setError("Couldn't delete $name");
-        return;
-      }
-
-      try {
-        if (!_layoutIoBlocked(_currentDirectory)) {
-          await _repository.removeFromLayout(_currentDirectory, name);
-        }
-        debugPrint('Removed $name from metadata');
-      } catch (e) {
-        debugPrint('Failed to update metadata during delete: $e');
-        _setLayoutIssue(_currentDirectory, e);
-      }
-
+      final item = await _deleteOne(name);
+      if (!item.removed) return;
       await _loadDirectoryImpl(_currentDirectory,
           addToHistory: false, force: true);
+      if (item.item != null) _record(DeletedEdit([item.item!]));
     });
   }
 
@@ -906,6 +988,11 @@ class DesktopViewModel extends ChangeNotifier {
 
       await _loadDirectoryImpl(_currentDirectory,
           addToHistory: false, force: true);
+      _record(RenameEdit(
+        directory: _currentDirectory,
+        oldName: oldName,
+        newName: newName,
+      ));
     });
   }
 
@@ -1042,6 +1129,18 @@ class DesktopViewModel extends ChangeNotifier {
     }
     return _runExclusive(() async {
       try {
+        final before = <String, Map<String, dynamic>>{};
+        for (final name in nodeNames) {
+          final start = _dragStartPositions[name];
+          final node = _findNode(name);
+          if (start == null || node == null) continue;
+          before[name] = {
+            'x': start.dx,
+            'y': start.dy,
+            if (node.color != null) 'color': node.color!.toARGB32(),
+          };
+        }
+
         // Calculate what the snapped positions would be
         final snappedPositions = <String, Offset>{};
         for (final nodeName in nodeNames) {
@@ -1077,6 +1176,13 @@ class DesktopViewModel extends ChangeNotifier {
         notifyListeners();
         _dragStartPositions.clear();
         await _saveMetadata();
+        if (canPlace) {
+          _recordLayoutChange(
+            _currentDirectory,
+            before,
+            _clonedNodeLayouts(before.keys),
+          );
+        }
       } finally {
         endInteraction();
       }
@@ -1160,37 +1266,41 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   Future<void> _performMove(Set<String> nodeNames, String targetPath) async {
+    final sourceDir = _currentDirectory;
+    final sourceLayouts = <String, Map<String, dynamic>?>{};
     try {
-      // Move each node in the filesystem
+      if (!_layoutIoBlocked(sourceDir)) {
+        final sourceLayout = await _repository.readLayout(sourceDir);
+        for (final name in nodeNames) {
+          sourceLayouts[name] = _layoutValue(sourceLayout[name]);
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to read source layout before move: $e');
+    }
+
+    final renamed = <String>[];
+    final destLayouts = <String, Map<String, dynamic>>{};
+    try {
       for (final nodeName in nodeNames) {
-        final sourcePath = p.join(_currentDirectory, nodeName);
+        final sourcePath = p.join(sourceDir, nodeName);
         final destPath = p.join(targetPath, nodeName);
         await _repository.rename(sourcePath, destPath);
+        renamed.add(nodeName);
       }
 
-      // Read source layout to preserve attributes during move
-      final sourceLayout = await _repository.readLayout(_currentDirectory);
-
-      // Preserve node attributes before removing from source layout
-      final movedNodeData = <String, Map<String, dynamic>>{};
-      for (final nodeName in nodeNames) {
-        if (sourceLayout.containsKey(nodeName)) {
-          movedNodeData[nodeName] =
-              Map<String, dynamic>.from(sourceLayout[nodeName] as Map);
-        }
-      }
-
-      // Update layout for source directory (remove moved nodes)
       try {
-        for (final nodeName in nodeNames) {
-          sourceLayout.remove(nodeName);
+        if (!_layoutIoBlocked(sourceDir)) {
+          final sourceLayout = await _repository.readLayout(sourceDir);
+          for (final nodeName in renamed) {
+            sourceLayout.remove(nodeName);
+          }
+          await _repository.updateLayout(sourceDir, sourceLayout);
         }
-        await _repository.updateLayout(_currentDirectory, sourceLayout);
       } catch (e) {
         debugPrint('Failed to update source directory layout: $e');
       }
 
-      // Auto-place moved nodes in target directory
       try {
         final targetLayout = await _repository.readLayout(targetPath);
         final targetPlacementConfig =
@@ -1204,8 +1314,7 @@ class DesktopViewModel extends ChangeNotifier {
           usedPositions.add(pos);
         }
 
-        // Find positions for moved nodes using target directory's config
-        for (final nodeName in nodeNames) {
+        for (final nodeName in renamed) {
           final pos = _findNextPositionUsingConfig(
             targetPlacementConfig,
             usedPositions,
@@ -1213,25 +1322,36 @@ class DesktopViewModel extends ChangeNotifier {
           );
           usedPositions.add(pos);
 
-          // Preserve all attributes from source except position
           final newEntry =
-              Map<String, dynamic>.from(movedNodeData[nodeName] ?? {});
+              Map<String, dynamic>.from(sourceLayouts[nodeName] ?? {});
           newEntry['x'] = pos.dx;
           newEntry['y'] = pos.dy;
           targetLayout[nodeName] = newEntry;
+          destLayouts[nodeName] = Map<String, dynamic>.from(newEntry);
         }
 
-        // Save target directory layout
         await _repository.updateLayout(targetPath, targetLayout);
       } catch (e) {
         debugPrint('Failed to auto-place in target directory: $e');
       }
 
-      // Reload source directory (stays in current view)
       await _loadDirectoryImpl(_currentDirectory,
           addToHistory: false, force: true);
-    } catch (e) {
-      rethrow;
+    } finally {
+      if (renamed.isNotEmpty) {
+        _record(MoveEdit(
+          destDir: targetPath,
+          items: [
+            for (final name in renamed)
+              MoveEditItem(
+                sourceDir: sourceDir,
+                name: name,
+                sourceLayout: sourceLayouts[name],
+                destLayout: destLayouts[name],
+              ),
+          ],
+        ));
+      }
     }
   }
 
@@ -1372,14 +1492,103 @@ class DesktopViewModel extends ChangeNotifier {
     });
   }
 
+  /// Where an in-app drag of tiles in the open folder would land.
+  ///
+  /// Returns null when [paths] are not all tiles in this folder (an external
+  /// drop). The directory under the pointer receives every dragged tile.
+  /// Any other occupied cell in the footprint — including a directory the
+  /// pointer is not on — blocks the whole drop.
+  ///
+  /// [anchorPath] is the tile the OS drag image represents. [dropCell] is the
+  /// cell that image would land on. [vacateSources] is true for a move: those
+  /// cells are free. A copy keeps them occupied.
+  InAppCanvasDrop? resolveInAppCanvasDrop({
+    required List<String> paths,
+    required String? anchorPath,
+    required Offset dropCell,
+    required bool vacateSources,
+    DesktopNode? cursorNode,
+  }) {
+    if (anchorPath == null || paths.isEmpty) return null;
+    if (p.dirname(anchorPath) != _currentDirectory) return null;
+    final anchorName = p.basename(anchorPath);
+    if (_findNode(anchorName) == null) return null;
+
+    final names = <String>[];
+    for (final path in paths) {
+      if (p.dirname(path) != _currentDirectory) return null;
+      final name = p.basename(path);
+      if (name == MetadataManager.fileName) continue;
+      if (_findNode(name) == null) return null;
+      names.add(name);
+    }
+    if (names.isEmpty || !names.contains(anchorName)) return null;
+
+    if (cursorNode != null &&
+        cursorNode.isDirectory &&
+        !names.contains(cursorNode.name)) {
+      final dest = p.join(_currentDirectory, cursorNode.name);
+      if (isDropIntoSelf(dest, paths)) return const InAppCanvasDrop.blocked();
+      return InAppCanvasDrop.intoDirectory(
+        directoryPath: dest,
+        directoryName: cursorNode.name,
+        directoryPosition: cursorNode.position,
+      );
+    }
+
+    final anchor = _findNode(anchorName)!;
+    final delta = dropCell - anchor.position;
+    final placements = <String, Offset>{
+      for (final name in names) name: _findNode(name)!.position + delta,
+    };
+    if (!_exactPlacementsFit(placements, vacateSources: vacateSources)) {
+      return const InAppCanvasDrop.blocked();
+    }
+    return InAppCanvasDrop.reposition(
+      placements: placements,
+      anchorName: anchorName,
+    );
+  }
+
+  /// True when every landing cell is free.
+  /// A move vacates the tiles being placed; a copy does not.
+  bool _exactPlacementsFit(
+    Map<String, Offset> placements, {
+    required bool vacateSources,
+  }) {
+    if (placements.isEmpty) return false;
+    final occupied = getOccupiedPositions(
+      _nodes,
+      excludeNames: vacateSources ? placements.keys.toSet() : const <String>{},
+    );
+    return canPlaceNodes(placements.values.toList(), occupied);
+  }
+
+  /// Moves every named tile to its cell, or none of them.
+  bool _applyExactPlacements(Map<String, Offset> placements) {
+    if (!_exactPlacementsFit(placements, vacateSources: true)) return false;
+    for (final name in placements.keys) {
+      if (_findNode(name) == null) return false;
+    }
+    for (final entry in placements.entries) {
+      _replaceNode(entry.key, (n) => n.copyWith(position: entry.value));
+    }
+    notifyListeners();
+    return true;
+  }
+
   /// Copy or move [paths] into [destDir] (defaults to the open folder).
   /// Same conflict and placement rules as paste. Used by OS drop.
+  ///
+  /// [placements] maps source basenames to landing cells for a same-folder
+  /// drop. Every tile lands there, or none do.
   Future<bool> importPaths(
     List<String> paths, {
     required bool isCut,
     Offset? at,
     String? destDir,
     bool skipConflicts = false,
+    Map<String, Offset>? placements,
   }) {
     return _runExclusive(() => _importPathsImpl(
           paths,
@@ -1389,6 +1598,7 @@ class DesktopViewModel extends ChangeNotifier {
           skipConflicts: skipConflicts,
           clearClipboardOnCut: false,
           errorVerb: 'drop',
+          placements: placements,
         ));
   }
 
@@ -1400,6 +1610,7 @@ class DesktopViewModel extends ChangeNotifier {
     required bool skipConflicts,
     required bool clearClipboardOnCut,
     required String errorVerb,
+    Map<String, Offset>? placements,
   }) async {
     final items = [
       for (final path in paths)
@@ -1416,7 +1627,25 @@ class DesktopViewModel extends ChangeNotifier {
 
     if (isCut && allFromHere) {
       if (destDir == _currentDirectory) {
-        await _placePastedNodes([for (final item in items) item.name], at);
+        final names = [for (final item in items) item.name];
+        final before = _clonedNodeLayouts(names);
+        if (placements != null && placements.isNotEmpty) {
+          final wanted = <String, Offset>{};
+          for (final item in items) {
+            final pos = placements[item.name];
+            if (pos == null) return false;
+            wanted[item.name] = pos;
+          }
+          if (!_applyExactPlacements(wanted)) return false;
+          await _saveMetadata();
+        } else {
+          await _placePastedNodes(names, at);
+        }
+        _recordLayoutChange(
+          _currentDirectory,
+          before,
+          _clonedNodeLayouts(names),
+        );
         if (clearClipboardOnCut) {
           _clipboard = null;
           await _clearOsClipboard();
@@ -1471,8 +1700,42 @@ class DesktopViewModel extends ChangeNotifier {
 
     if (working.isEmpty) return false;
 
+    Map<String, Offset>? copyPlacements;
+    if (!isCut &&
+        placements != null &&
+        placements.isNotEmpty &&
+        allFromHere &&
+        destDir == _currentDirectory) {
+      final wanted = <String, Offset>{};
+      for (final item in working) {
+        final pos = placements[item.name];
+        if (pos == null) return false;
+        wanted[item.name] = pos;
+      }
+      if (!_exactPlacementsFit(wanted, vacateSources: false)) return false;
+      copyPlacements = {
+        for (var i = 0; i < working.length; i++)
+          destNames[i]: wanted[working[i].name]!,
+      };
+    }
+
     final importedNames = <String>[];
     final moved = <({String path, String name, String sourceDir})>[];
+    final sourceLayouts = <String, Map<String, Map<String, dynamic>?>>{};
+    if (isCut) {
+      for (final dir in {for (final item in working) item.sourceDir}) {
+        try {
+          if (_layoutIoBlocked(dir)) continue;
+          final layout = await _repository.readLayout(dir);
+          sourceLayouts[dir] = {
+            for (final item in working.where((i) => i.sourceDir == dir))
+              item.name: _layoutValue(layout[item.name]),
+          };
+        } catch (e) {
+          debugPrint('Failed to read source layout before move: $e');
+        }
+      }
+    }
     try {
       if (isCut) {
         for (var i = 0; i < working.length; i++) {
@@ -1517,6 +1780,16 @@ class DesktopViewModel extends ChangeNotifier {
     } catch (e) {
       debugPrint('Import failed: $e');
       _setError("Couldn't $errorVerb");
+      if (isCut && moved.isNotEmpty) {
+        _rememberMove(
+          destDir: destDir,
+          moved: moved,
+          sourceLayouts: sourceLayouts,
+          destLayout: const {},
+        );
+      } else if (!isCut && importedNames.isNotEmpty) {
+        _rememberCreated(destDir, importedNames, const {});
+      }
       return false;
     }
 
@@ -1524,11 +1797,28 @@ class DesktopViewModel extends ChangeNotifier {
 
     if (destDir == _currentDirectory) {
       await _loadDirectoryImpl(destDir, addToHistory: false, force: true);
-      await _placePastedNodes(importedNames, at);
+      if (copyPlacements != null) {
+        if (_applyExactPlacements(copyPlacements)) {
+          await _saveMetadata();
+        }
+      } else {
+        await _placePastedNodes(importedNames, at);
+      }
     } else {
       await _autoPlaceNamesInLayout(destDir, importedNames);
       await _loadDirectoryImpl(_currentDirectory,
           addToHistory: false, force: true);
+    }
+    final destLayout = await _readLayoutOrEmpty(destDir);
+    if (isCut) {
+      _rememberMove(
+        destDir: destDir,
+        moved: moved,
+        sourceLayouts: sourceLayouts,
+        destLayout: destLayout,
+      );
+    } else {
+      _rememberCreated(destDir, importedNames, destLayout);
     }
     return true;
   }
@@ -1611,6 +1901,7 @@ class DesktopViewModel extends ChangeNotifier {
   }
 
   /// After another app accepts an outbound move, remove leftovers and reload.
+  /// This is not undoable: the other app owns the file.
   Future<void> finalizeExternalMove(List<String> paths) {
     return _runExclusive(() async {
       for (final path in paths) {
@@ -1738,10 +2029,516 @@ class DesktopViewModel extends ChangeNotifier {
     );
   }
 
-  Future<void> _performDelete() async {
+  Future<void> _performDelete() {
     final nodesToDelete = _selectionController.selected.toList();
-    for (final nodeName in nodesToDelete) {
-      await deleteNode(nodeName);
+    if (nodesToDelete.isEmpty) return Future.value();
+    return _runExclusive(() async {
+      final items = <DeletedEditItem>[];
+      var removedAny = false;
+      for (final nodeName in nodesToDelete) {
+        final result = await _deleteOne(nodeName);
+        if (result.removed) removedAny = true;
+        final item = result.item;
+        if (item != null) items.add(item);
+      }
+      if (removedAny) {
+        await _loadDirectoryImpl(_currentDirectory,
+            addToHistory: false, force: true);
+      }
+      if (items.isNotEmpty) _record(DeletedEdit(items));
+    });
+  }
+
+  Future<void> undo() => _runExclusive(_undoImpl);
+
+  Future<void> redo() => _runExclusive(_redoImpl);
+
+  Future<void> _undoImpl() async {
+    final entry = _edits.takeUndo();
+    if (entry == null) return;
+    final result = await _revert(entry);
+    switch (result) {
+      case _HistoryApply.applied:
+        _edits.noteRedo(entry);
+      case _HistoryApply.rejected:
+        _edits.noteUndo(entry);
+      case _HistoryApply.forgotten:
+        break;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _redoImpl() async {
+    final entry = _edits.takeRedo();
+    if (entry == null) return;
+    final result = await _reapply(entry);
+    switch (result) {
+      case _HistoryApply.applied:
+        _edits.noteUndo(entry);
+      case _HistoryApply.rejected:
+        _edits.noteRedo(entry);
+      case _HistoryApply.forgotten:
+        break;
+    }
+    notifyListeners();
+  }
+
+  Future<({DeletedEditItem? item, bool removed})> _deleteOne(String name) async {
+    final path = p.join(_currentDirectory, name);
+    final existing = _findNode(name)?.toJson();
+    final TrashToken? token;
+    try {
+      token = await _repository.delete(path);
+      debugPrint('Deleted: $path');
+    } catch (e) {
+      debugPrint('Error deleting: $e');
+      _setError("Couldn't delete $name");
+      return (item: null, removed: false);
+    }
+
+    try {
+      if (!_layoutIoBlocked(_currentDirectory)) {
+        await _repository.removeFromLayout(_currentDirectory, name);
+      }
+    } catch (e) {
+      debugPrint('Failed to update metadata during delete: $e');
+      _setLayoutIssue(_currentDirectory, e);
+    }
+
+    final item = token == null
+        ? null
+        : DeletedEditItem(
+            directory: _currentDirectory,
+            name: name,
+            layout:
+                existing == null ? null : Map<String, dynamic>.from(existing),
+            token: token,
+          );
+    return (item: item, removed: true);
+  }
+
+  void _record(EditEntry entry) {
+    _edits.push(entry);
+    notifyListeners();
+  }
+
+  void _rememberNewNode(String name) {
+    final node = _findNode(name);
+    _record(CreatedEdit(
+      directory: _currentDirectory,
+      items: [
+        CreatedEditItem(
+          name: name,
+          layout: node == null ? null : Map<String, dynamic>.from(node.toJson()),
+        ),
+      ],
+      tokens: [null],
+    ));
+  }
+
+  void _rememberCreated(
+    String directory,
+    List<String> names,
+    Map<String, dynamic> destLayout,
+  ) {
+    if (names.isEmpty) return;
+    _record(CreatedEdit(
+      directory: directory,
+      items: [
+        for (final name in names)
+          CreatedEditItem(name: name, layout: _layoutValue(destLayout[name])),
+      ],
+      tokens: List<TrashToken?>.filled(names.length, null),
+    ));
+  }
+
+  void _rememberMove({
+    required String destDir,
+    required List<({String path, String name, String sourceDir})> moved,
+    required Map<String, Map<String, Map<String, dynamic>?>> sourceLayouts,
+    required Map<String, dynamic> destLayout,
+  }) {
+    if (moved.isEmpty) return;
+    _record(MoveEdit(
+      destDir: destDir,
+      items: [
+        for (final item in moved)
+          MoveEditItem(
+            sourceDir: item.sourceDir,
+            name: item.name,
+            sourceLayout: sourceLayouts[item.sourceDir]?[item.name],
+            destLayout: _layoutValue(destLayout[item.name]),
+          ),
+      ],
+    ));
+  }
+
+  Map<String, dynamic>? _layoutValue(Object? value) {
+    if (value is! Map) return null;
+    return Map<String, dynamic>.from(value);
+  }
+
+  Map<String, Map<String, dynamic>> _clonedNodeLayouts(Iterable<String> names) {
+    final layouts = <String, Map<String, dynamic>>{};
+    for (final name in names) {
+      final node = _findNode(name);
+      if (node != null) layouts[name] = node.toJson();
+    }
+    return layouts;
+  }
+
+  void _recordLayoutChange(
+    String directory,
+    Map<String, Map<String, dynamic>> before,
+    Map<String, Map<String, dynamic>> after,
+  ) {
+    final beforeChanged = <String, Map<String, dynamic>>{};
+    final afterChanged = <String, Map<String, dynamic>>{};
+    for (final name in before.keys) {
+      final next = after[name];
+      if (next == null || _sameLayout(before[name]!, next)) continue;
+      beforeChanged[name] = Map<String, dynamic>.from(before[name]!);
+      afterChanged[name] = Map<String, dynamic>.from(next);
+    }
+    if (beforeChanged.isEmpty) return;
+    _record(LayoutEdit(
+      directory: directory,
+      before: beforeChanged,
+      after: afterChanged,
+    ));
+  }
+
+  bool _sameLayout(Map<String, dynamic> a, Map<String, dynamic> b) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (a[key] != b[key]) return false;
+    }
+    return true;
+  }
+
+  Future<Map<String, dynamic>> _readLayoutOrEmpty(String directory) async {
+    if (directory == _currentDirectory) {
+      return {for (final node in _nodes) node.name: node.toJson()};
+    }
+    try {
+      if (_layoutIoBlocked(directory)) return {};
+      return await _repository.readLayout(directory);
+    } catch (e) {
+      debugPrint('Failed to read layout for undo: $e');
+      return {};
+    }
+  }
+
+  Future<_HistoryApply> _revert(EditEntry entry) {
+    return switch (entry) {
+      MoveEdit move => _applyMove(move, forward: false),
+      CreatedEdit created => _undoCreated(created),
+      DeletedEdit deleted => _undoDeleted(deleted),
+      RenameEdit renamed => _applyRename(renamed, undo: true),
+      LayoutEdit layout => _applyLayout(layout, undo: true),
+    };
+  }
+
+  Future<_HistoryApply> _reapply(EditEntry entry) {
+    return switch (entry) {
+      MoveEdit move => _applyMove(move, forward: true),
+      CreatedEdit created => _redoCreated(created),
+      DeletedEdit deleted => _redoDeleted(deleted),
+      RenameEdit renamed => _applyRename(renamed, undo: false),
+      LayoutEdit layout => _applyLayout(layout, undo: false),
+    };
+  }
+
+  String _historyError({required bool undo, required bool missing}) {
+    final verb = undo ? 'undo' : 'redo';
+    if (missing) return "Can't $verb — those items aren't there anymore";
+    return "Can't $verb — a file with that name is already there";
+  }
+
+  Future<bool?> _containsName(String directory, String name) async {
+    try {
+      final entities = await _repository.listEntities(directory);
+      return entities.any((e) => e.name == name);
+    } catch (e) {
+      debugPrint('Failed to list $directory: $e');
+      return null;
+    }
+  }
+
+  Future<_HistoryApply> _applyMove(MoveEdit edit, {required bool forward}) async {
+    for (final item in edit.items) {
+      final fromDir = forward ? item.sourceDir : edit.destDir;
+      final toDir = forward ? edit.destDir : item.sourceDir;
+      final fromExists = await _containsName(fromDir, item.name);
+      if (fromExists != true) {
+        _setError(_historyError(undo: !forward, missing: true));
+        return _HistoryApply.rejected;
+      }
+      final toExists = await _containsName(toDir, item.name);
+      if (toExists == null) {
+        _setError(_historyError(undo: !forward, missing: true));
+        return _HistoryApply.rejected;
+      }
+      if (toExists) {
+        _setError(_historyError(undo: !forward, missing: false));
+        return _HistoryApply.rejected;
+      }
+    }
+
+    try {
+      for (final item in edit.items) {
+        final fromDir = forward ? item.sourceDir : edit.destDir;
+        final toDir = forward ? edit.destDir : item.sourceDir;
+        await _repository.rename(
+          p.join(fromDir, item.name),
+          p.join(toDir, item.name),
+        );
+      }
+    } catch (e) {
+      debugPrint('Move undo failed: $e');
+      _setError(forward ? "Can't redo that move" : "Can't undo that move");
+      return _HistoryApply.rejected;
+    }
+
+    final destUpdates = <String, Map<String, dynamic>?>{
+      for (final item in edit.items)
+        item.name: forward ? item.destLayout : null,
+    };
+    await _patchLayouts(edit.destDir, destUpdates);
+
+    final bySource = <String, Map<String, Map<String, dynamic>?>>{};
+    for (final item in edit.items) {
+      (bySource[item.sourceDir] ??= {})[item.name] =
+          forward ? null : item.sourceLayout;
+    }
+    for (final source in bySource.entries) {
+      await _patchLayouts(source.key, source.value);
+    }
+
+    if (_currentDirectory == edit.destDir ||
+        edit.items.any((item) => item.sourceDir == _currentDirectory)) {
+      await _loadDirectoryImpl(_currentDirectory,
+          addToHistory: false, force: true);
+    }
+    return _HistoryApply.applied;
+  }
+
+  Future<_HistoryApply> _undoCreated(CreatedEdit edit) async {
+    for (var i = 0; i < edit.items.length; i++) {
+      if (edit.tokens[i] != null) continue;
+      final exists = await _containsName(edit.directory, edit.items[i].name);
+      if (exists != true) {
+        _setError(_historyError(undo: true, missing: true));
+        return _HistoryApply.rejected;
+      }
+    }
+
+    var restorable = true;
+    for (var i = 0; i < edit.items.length; i++) {
+      if (edit.tokens[i] != null) continue;
+      final name = edit.items[i].name;
+      try {
+        edit.tokens[i] =
+            await _repository.delete(p.join(edit.directory, name));
+      } catch (e) {
+        debugPrint('Undo create failed: $e');
+        _setError("Can't undo — couldn't move $name to the trash");
+        return _HistoryApply.rejected;
+      }
+      if (edit.tokens[i] == null) restorable = false;
+      try {
+        if (!_layoutIoBlocked(edit.directory)) {
+          await _repository.removeFromLayout(edit.directory, name);
+        }
+      } catch (e) {
+        debugPrint('Failed to clear layout after undo create: $e');
+      }
+    }
+    await _reloadIfOpen(edit.directory);
+    if (!restorable) {
+      _setError("Undid that, but it can't be redone");
+      return _HistoryApply.forgotten;
+    }
+    return _HistoryApply.applied;
+  }
+
+  Future<_HistoryApply> _redoCreated(CreatedEdit edit) async {
+    if (edit.tokens.any((token) => token == null)) {
+      _setError("Can't redo that");
+      return _HistoryApply.rejected;
+    }
+    for (final item in edit.items) {
+      final exists = await _containsName(edit.directory, item.name);
+      if (exists == null) {
+        _setError(_historyError(undo: false, missing: true));
+        return _HistoryApply.rejected;
+      }
+      if (exists) {
+        _setError(_historyError(undo: false, missing: false));
+        return _HistoryApply.rejected;
+      }
+    }
+    try {
+      for (var i = 0; i < edit.items.length; i++) {
+        await _repository.restore(edit.tokens[i]!);
+        edit.tokens[i] = null;
+      }
+    } catch (e) {
+      debugPrint('Redo create failed: $e');
+      _setError("Can't redo — the trash entry is gone");
+      return _HistoryApply.rejected;
+    }
+    await _patchLayouts(edit.directory, {
+      for (final item in edit.items) item.name: item.layout,
+    });
+    await _reloadIfOpen(edit.directory);
+    return _HistoryApply.applied;
+  }
+
+  Future<_HistoryApply> _undoDeleted(DeletedEdit edit) async {
+    for (final item in edit.items) {
+      final exists = await _containsName(item.directory, item.name);
+      if (exists == null) {
+        _setError(_historyError(undo: true, missing: true));
+        return _HistoryApply.rejected;
+      }
+      if (exists) {
+        _setError(_historyError(undo: true, missing: false));
+        return _HistoryApply.rejected;
+      }
+    }
+    try {
+      for (final item in edit.items) {
+        await _repository.restore(item.token);
+      }
+    } catch (e) {
+      debugPrint('Undo delete failed: $e');
+      _setError("Can't undo — the trash entry is gone");
+      return _HistoryApply.rejected;
+    }
+    final byDir = <String, Map<String, Map<String, dynamic>?>>{};
+    for (final item in edit.items) {
+      (byDir[item.directory] ??= {})[item.name] = item.layout;
+    }
+    for (final dir in byDir.entries) {
+      await _patchLayouts(dir.key, dir.value);
+      await _reloadIfOpen(dir.key);
+    }
+    return _HistoryApply.applied;
+  }
+
+  Future<_HistoryApply> _redoDeleted(DeletedEdit edit) async {
+    for (final item in edit.items) {
+      final exists = await _containsName(item.directory, item.name);
+      if (exists != true) {
+        _setError(_historyError(undo: false, missing: true));
+        return _HistoryApply.rejected;
+      }
+    }
+    final touched = <String>{};
+    for (final item in edit.items) {
+      final TrashToken? token;
+      try {
+        token = await _repository.delete(p.join(item.directory, item.name));
+      } catch (e) {
+        debugPrint('Redo delete failed: $e');
+        _setError("Can't redo that delete");
+        return _HistoryApply.rejected;
+      }
+      if (token == null) {
+        _setError("Redid that delete, but it can't be undone");
+        return _HistoryApply.forgotten;
+      }
+      item.token = token;
+      try {
+        if (!_layoutIoBlocked(item.directory)) {
+          await _repository.removeFromLayout(item.directory, item.name);
+        }
+      } catch (e) {
+        debugPrint('Failed to clear layout after redo delete: $e');
+      }
+      touched.add(item.directory);
+    }
+    for (final dir in touched) {
+      await _reloadIfOpen(dir);
+    }
+    return _HistoryApply.applied;
+  }
+
+  Future<_HistoryApply> _applyRename(RenameEdit edit, {required bool undo}) async {
+    final from = undo ? edit.newName : edit.oldName;
+    final to = undo ? edit.oldName : edit.newName;
+    final fromExists = await _containsName(edit.directory, from);
+    if (fromExists != true) {
+      _setError(_historyError(undo: undo, missing: true));
+      return _HistoryApply.rejected;
+    }
+    final toExists = await _containsName(edit.directory, to);
+    if (toExists == null) {
+      _setError(_historyError(undo: undo, missing: true));
+      return _HistoryApply.rejected;
+    }
+    if (toExists) {
+      _setError(_historyError(undo: undo, missing: false));
+      return _HistoryApply.rejected;
+    }
+    try {
+      await _repository.rename(
+        p.join(edit.directory, from),
+        p.join(edit.directory, to),
+      );
+      if (!_layoutIoBlocked(edit.directory)) {
+        await _repository.renameInLayout(edit.directory, from, to);
+      }
+    } catch (e) {
+      debugPrint('Rename undo failed: $e');
+      _setError(undo ? "Can't undo that rename" : "Can't redo that rename");
+      return _HistoryApply.rejected;
+    }
+    await _reloadIfOpen(edit.directory);
+    return _HistoryApply.applied;
+  }
+
+  Future<_HistoryApply> _applyLayout(LayoutEdit edit, {required bool undo}) async {
+    final desired = undo ? edit.before : edit.after;
+    for (final name in desired.keys) {
+      final exists = await _containsName(edit.directory, name);
+      if (exists != true) {
+        _setError(_historyError(undo: undo, missing: true));
+        return _HistoryApply.rejected;
+      }
+    }
+    await _patchLayouts(edit.directory, {
+      for (final entry in desired.entries) entry.key: entry.value,
+    });
+    await _reloadIfOpen(edit.directory);
+    return _HistoryApply.applied;
+  }
+
+  Future<void> _patchLayouts(
+    String directory,
+    Map<String, Map<String, dynamic>?> updates,
+  ) async {
+    if (updates.isEmpty || _layoutIoBlocked(directory)) return;
+    try {
+      final layout = await _repository.readLayout(directory);
+      for (final entry in updates.entries) {
+        if (entry.value == null) {
+          layout.remove(entry.key);
+        } else {
+          layout[entry.key] = Map<String, dynamic>.from(entry.value!);
+        }
+      }
+      await _repository.updateLayout(directory, layout);
+    } catch (e) {
+      debugPrint('Failed to patch layout: $e');
+      _setLayoutIssue(directory, e);
+    }
+  }
+
+  Future<void> _reloadIfOpen(String directory) async {
+    if (directory == _currentDirectory) {
+      await _loadDirectoryImpl(directory, addToHistory: false, force: true);
     }
   }
 

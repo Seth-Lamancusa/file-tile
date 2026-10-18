@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
@@ -7,18 +9,23 @@ import 'package:provider/provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import '../controllers/click_handler.dart';
+import '../services/appimage_updater.dart';
 import '../models/binding_map.dart';
 import '../models/click_event.dart';
 import '../models/directory_layout_issue.dart';
 import '../models/metadata_backend.dart';
 import '../viewmodels/desktop_viewmodel.dart';
+import '../widgets/appimage_update_dialog.dart';
 import '../widgets/breadcrumb_segment.dart';
 import '../widgets/cascading_menu.dart';
 import '../widgets/os_drop_target_overlay.dart';
 import '../widgets/placement_region_painter.dart';
 import '../widgets/selection_box_painter.dart';
 import '../utils/coordinate_space.dart';
+import '../utils/edge_auto_scroll.dart';
 import '../utils/file_icons.dart';
+import '../utils/linux_file_picker.dart';
+import '../utils/grid_position.dart';
 import '../utils/metadata_helper.dart';
 import '../utils/os_file_clipboard.dart';
 import '../utils/os_file_drop.dart';
@@ -34,6 +41,8 @@ class DesktopView extends StatefulWidget {
   State<DesktopView> createState() => _DesktopViewState();
 }
 
+enum _EdgeScrollKind { osDrop, layoutFile }
+
 class _DesktopViewState extends State<DesktopView> {
   late FocusNode _focusNode;
   late ClickHandler _clickHandler;
@@ -46,13 +55,25 @@ class _DesktopViewState extends State<DesktopView> {
   Offset? _selectionBoxStart;
   Offset? _selectionBoxEnd;
   final GlobalKey _canvasKey = GlobalKey();
-  Rect? _osDropCellRect;
+  final AppImageUpdater _appImageUpdater = AppImageUpdater();
+  List<Offset> _osDropCells = const [];
+  Offset? _osDropAnchorCell;
   int _osDropDepth = 0;
   bool _osDragOutDropWasLocal = false;
   List<String> _pendingDropPaths = const [];
   bool _pendingDropCut = true;
   String? _pendingDropDest;
   Offset? _pendingDropAt;
+  Map<String, Offset>? _pendingDropPlacements;
+  Size? _canvasSize;
+  Timer? _edgeScrollTimer;
+  _EdgeScrollKind? _edgeScrollKind;
+  Offset? _edgeScrollCursor;
+  List<String> _edgeScrollPaths = const [];
+  String? _edgeScrollAnchor;
+  bool _edgeScrollVacate = true;
+  String? _layoutDragName;
+  Offset? _layoutGrabInCanvas;
   // Deferred: directory search.
   // bool _searchBarOpen = false;
   // late FocusNode _searchFocusNode;
@@ -71,11 +92,70 @@ class _DesktopViewState extends State<DesktopView> {
         selectionController: viewModel.selectionController,
         bindings: viewModel.bindings,
       );
+      unawaited(_offerAppImageUpdate());
     });
+  }
+
+  Future<void> _offerAppImageUpdate() async {
+    final status = await _appImageUpdater.checkForUpdate();
+    if (!mounted || status != AppImageUpdateStatus.updateAvailable) return;
+
+    final install = await showDialog<bool>(
+      context: context,
+      builder: (context) => const AppImageUpdatePrompt(),
+    );
+    if (install != true || !mounted) return;
+
+    final result = await showDialog<AppImageInstallResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        unawaited(() async {
+          AppImageInstallResult result;
+          try {
+            result = await _appImageUpdater.installUpdate();
+          } catch (e) {
+            result = AppImageInstallResult.failed('$e');
+          }
+          if (dialogContext.mounted) {
+            Navigator.pop(dialogContext, result);
+          }
+        }());
+        return const AppImageUpdateProgress();
+      },
+    );
+    if (!mounted || result == null) return;
+
+    if (!result.installed) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AppImageUpdateFailed(message: result.message),
+      );
+      return;
+    }
+
+    final restart = await showDialog<bool>(
+      context: context,
+      builder: (context) => const AppImageRestartPrompt(),
+    );
+    if (restart != true || !mounted) return;
+
+    try {
+      await _appImageUpdater.relaunch();
+    } catch (_) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => const AppImageUpdateFailed(
+          message: "Couldn't restart. Open File Tile again to use the update.",
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _stopEdgeAutoScroll();
     _focusNode.dispose();
     // Deferred: directory search.
     // _searchFocusNode.dispose();
@@ -148,32 +228,134 @@ class _DesktopViewState extends State<DesktopView> {
     return globalPos - Offset(0, AppConfig.appBarHeight);
   }
 
+  void _armOsEdgeScroll({
+    required Offset global,
+    required List<String> localPaths,
+    required String? anchorPath,
+    required bool vacateSources,
+  }) {
+    _edgeScrollKind = _EdgeScrollKind.osDrop;
+    _edgeScrollCursor = global;
+    _edgeScrollPaths = localPaths;
+    _edgeScrollAnchor = anchorPath;
+    _edgeScrollVacate = vacateSources;
+    _ensureEdgeScrollTimer();
+  }
+
+  void _armLayoutEdgeScroll(Offset global) {
+    _edgeScrollKind = _EdgeScrollKind.layoutFile;
+    _edgeScrollCursor = global;
+    _ensureEdgeScrollTimer();
+  }
+
+  void _ensureEdgeScrollTimer() {
+    if (_edgeScrollTimer != null) return;
+    _edgeScrollTimer = Timer.periodic(EdgeAutoScroll.tick, (_) {
+      _tickEdgeAutoScroll();
+    });
+  }
+
+  void _tickEdgeAutoScroll() {
+    if (!mounted || _edgeScrollKind == null) return;
+    final cursor = _edgeScrollCursor;
+    final canvasSize = _canvasSize;
+    if (cursor == null || canvasSize == null) return;
+
+    final viewModel = context.read<DesktopViewModel>();
+    final delta = EdgeAutoScroll.delta(
+      canvasLocal: _globalToCanvas(cursor),
+      canvasSize: canvasSize,
+    );
+    if (delta != Offset.zero) {
+      viewModel.offset = viewModel.offset + delta;
+    }
+    if (_edgeScrollKind == _EdgeScrollKind.layoutFile) {
+      _pinLayoutFileToCursor(viewModel);
+    } else if (delta != Offset.zero) {
+      _updateOsDropHover(
+        viewModel,
+        cursor,
+        localPaths: _edgeScrollPaths,
+        anchorPath: _edgeScrollAnchor,
+        vacateSources: _edgeScrollVacate,
+      );
+    }
+  }
+
+  /// Keep file-tile.json under the pointer while the canvas pans.
+  void _pinLayoutFileToCursor(DesktopViewModel viewModel) {
+    final name = _layoutDragName;
+    final grab = _layoutGrabInCanvas;
+    final cursor = _edgeScrollCursor;
+    if (name == null || grab == null || cursor == null) return;
+    DesktopNode? node;
+    for (final candidate in viewModel.nodes) {
+      if (candidate.name == name) {
+        node = candidate;
+        break;
+      }
+    }
+    if (node == null) return;
+    final targetScreen = _globalToCanvas(cursor) + grab;
+    final delta =
+        viewModel.coords.screenToLogical(targetScreen) - node.position;
+    if (delta.dx.abs() < 0.01 && delta.dy.abs() < 0.01) return;
+    viewModel.updateNodePosition(name, delta);
+  }
+
+  void _stopOsEdgeScroll() {
+    if (_edgeScrollKind != _EdgeScrollKind.osDrop) return;
+    _stopEdgeAutoScroll();
+  }
+
+  void _stopLayoutEdgeScroll() {
+    if (_edgeScrollKind == _EdgeScrollKind.layoutFile) {
+      _stopEdgeAutoScroll();
+      return;
+    }
+    _layoutDragName = null;
+    _layoutGrabInCanvas = null;
+  }
+
+  void _stopEdgeAutoScroll() {
+    _edgeScrollTimer?.cancel();
+    _edgeScrollTimer = null;
+    _edgeScrollKind = null;
+    _edgeScrollCursor = null;
+    _layoutDragName = null;
+    _layoutGrabInCanvas = null;
+  }
+
   void _osDropEnter(DesktopViewModel viewModel) {
     if (_osDropDepth == 0) viewModel.beginInteraction();
     _osDropDepth++;
   }
 
-  void _osDropLeave(DesktopViewModel viewModel) {
+  void _osDropLeave(DesktopViewModel viewModel, {required bool breadcrumbs}) {
     if (_osDropDepth == 0) return;
     _osDropDepth--;
     if (_osDropDepth == 0) {
       viewModel.endInteraction();
+      if (!breadcrumbs) _stopOsEdgeScroll();
       setState(() {
-        _osDropCellRect = null;
+        _osDropCells = const [];
+        _osDropAnchorCell = null;
         _dragTargetNodeName = null;
         _dragTargetBreadcrumbPath = null;
       });
     }
   }
 
-  void _osDropEnded(DesktopViewModel viewModel) {
+  void _osDropEnded(DesktopViewModel viewModel, {required bool breadcrumbs}) {
     if (_osDropDepth > 0) {
       viewModel.endInteraction();
     }
     _osDropDepth = 0;
+    if (!breadcrumbs) _stopOsEdgeScroll();
     if (!mounted) return;
     setState(() {
-      _osDropCellRect = null;
+      _osDropCells = const [];
+      _osDropAnchorCell = null;
       _dragTargetNodeName = null;
       _dragTargetBreadcrumbPath = null;
     });
@@ -186,7 +368,16 @@ class _DesktopViewState extends State<DesktopView> {
   }) {
     if (!dropSessionHasFiles(event.session)) return DropOperation.none;
     final localPaths = fileTileLocalDragPaths(event.session);
+    final operation = preferredOsDropOperation(
+      controlPressed: HardwareKeyboard.instance.isControlPressed,
+      allowed: event.session.allowedOperations,
+    );
+    if (operation == DropOperation.none) {
+      _clearOsDropAim();
+      return DropOperation.none;
+    }
     if (breadcrumbs) {
+      _stopOsEdgeScroll();
       final path = _hitTestBreadcrumb(event.position.global);
       if (path == null || isDropIntoSelf(path, localPaths)) {
         _clearOsDropAim();
@@ -195,78 +386,133 @@ class _DesktopViewState extends State<DesktopView> {
       setState(() {
         _dragTargetBreadcrumbPath = path;
         _dragTargetNodeName = null;
-        _osDropCellRect = null;
+        _osDropCells = const [];
+        _osDropAnchorCell = null;
       });
     } else {
-      if (!_updateOsDropHover(viewModel, event.position.global,
-          localPaths: localPaths)) {
+      final vacateSources = fileTileLocalDragIsCut(event.session) ??
+          operation == DropOperation.move;
+      if (!_updateOsDropHover(
+        viewModel,
+        event.position.global,
+        localPaths: localPaths,
+        anchorPath: fileTileLocalDragAnchor(event.session),
+        vacateSources: vacateSources,
+      )) {
         return DropOperation.none;
       }
+      _armOsEdgeScroll(
+        global: event.position.global,
+        localPaths: localPaths,
+        anchorPath: fileTileLocalDragAnchor(event.session),
+        vacateSources: vacateSources,
+      );
     }
-    return preferredOsDropOperation(
-      controlPressed: HardwareKeyboard.instance.isControlPressed,
-      allowed: event.session.allowedOperations,
-    );
+    return operation;
   }
 
   bool _updateOsDropHover(
     DesktopViewModel viewModel,
     Offset global, {
     required List<String> localPaths,
+    required String? anchorPath,
+    required bool vacateSources,
   }) {
-    final aim = _resolveOsCanvasDropAim(viewModel, global, localPaths);
+    final aim = _resolveOsCanvasDropAim(
+      viewModel,
+      global,
+      localPaths,
+      anchorPath: anchorPath,
+      vacateSources: vacateSources,
+    );
     if (aim == null) {
       _clearOsDropAim();
       return false;
     }
     if (aim.folderPath != null) {
-      final screen = viewModel.coords.logicalToScreen(aim.folderPosition!);
-      final size = GridConfig.gridCellSize * viewModel.scale;
       setState(() {
         _dragTargetNodeName = aim.folderName;
         _dragTargetBreadcrumbPath = null;
-        _osDropCellRect = Rect.fromLTWH(screen.dx, screen.dy, size, size);
+        _osDropCells = [aim.folderPosition!];
+        _osDropAnchorCell = aim.folderPosition;
       });
       return true;
     }
-    final screen = viewModel.coords.logicalToScreen(aim.cell!);
-    final size = viewModel.coords.renderedGridCellSize;
+    final cells = aim.placements?.values.toList() ?? [aim.cell!];
+    final anchor = aim.anchorName == null
+        ? aim.cell!
+        : aim.placements![aim.anchorName] ?? aim.cell!;
     setState(() {
       _dragTargetNodeName = null;
       _dragTargetBreadcrumbPath = null;
-      _osDropCellRect = Rect.fromLTWH(screen.dx, screen.dy, size, size);
+      _osDropCells = cells;
+      _osDropAnchorCell = anchor;
     });
     return true;
   }
 
   void _clearOsDropAim() {
-    if (_osDropCellRect == null &&
+    if (_osDropCells.isEmpty &&
+        _osDropAnchorCell == null &&
         _dragTargetNodeName == null &&
         _dragTargetBreadcrumbPath == null) {
       return;
     }
     setState(() {
-      _osDropCellRect = null;
+      _osDropCells = const [];
+      _osDropAnchorCell = null;
       _dragTargetNodeName = null;
       _dragTargetBreadcrumbPath = null;
     });
   }
 
-  _OsCanvasDropAim? _resolveOsCanvasDropAim(
-    DesktopViewModel viewModel,
-    Offset global,
-    List<String> localPaths,
-  ) {
-    final node = _hitTestNode(global, viewModel);
-    if (node != null) {
-      return _aimForOccupiedNode(viewModel, node, localPaths);
-    }
+  DesktopNode? _cursorNode(DesktopViewModel viewModel, Offset global) {
+    final hit = _hitTestNode(global, viewModel);
+    if (hit != null) return hit;
     final canvas = _globalToCanvas(global);
     final corner = viewModel.coords
         .snapToCellCorner(viewModel.coords.screenToLogical(canvas));
-    final occupant = _nodeAtCell(viewModel, corner);
-    if (occupant != null) {
-      return _aimForOccupiedNode(viewModel, occupant, localPaths);
+    return _nodeAtCell(viewModel, corner);
+  }
+
+  _OsCanvasDropAim? _resolveOsCanvasDropAim(
+    DesktopViewModel viewModel,
+    Offset global,
+    List<String> localPaths, {
+    required String? anchorPath,
+    required bool vacateSources,
+  }) {
+    final canvas = _globalToCanvas(global);
+    final corner = viewModel.coords
+        .snapToCellCorner(viewModel.coords.screenToLogical(canvas));
+    final node = _cursorNode(viewModel, global);
+    final decision = viewModel.resolveInAppCanvasDrop(
+      paths: localPaths,
+      anchorPath: anchorPath,
+      dropCell: corner,
+      vacateSources: vacateSources,
+      cursorNode: node,
+    );
+    if (decision != null) {
+      switch (decision.kind) {
+        case InAppCanvasDropKind.blocked:
+          return null;
+        case InAppCanvasDropKind.intoDirectory:
+          return _OsCanvasDropAim.folder(
+            folderPath: decision.directoryPath!,
+            folderName: decision.directoryName!,
+            folderPosition: decision.directoryPosition!,
+          );
+        case InAppCanvasDropKind.reposition:
+          return _OsCanvasDropAim.reposition(
+            cell: decision.placements[decision.anchorName] ?? corner,
+            placements: decision.placements,
+            anchorName: decision.anchorName!,
+          );
+      }
+    }
+    if (node != null) {
+      return _aimForOccupiedNode(viewModel, node, localPaths);
     }
     return _OsCanvasDropAim.cell(corner);
   }
@@ -313,6 +559,7 @@ class _DesktopViewState extends State<DesktopView> {
     DesktopViewModel viewModel, {
     required bool breadcrumbs,
   }) async {
+    if (!breadcrumbs) _stopOsEdgeScroll();
     if (isFileTileLocalDrop(event.session)) {
       _osDragOutDropWasLocal = true;
     }
@@ -322,30 +569,40 @@ class _DesktopViewState extends State<DesktopView> {
     if (snapshot == null || snapshot.paths.isEmpty) return;
 
     final localPaths = fileTileLocalDragPaths(event.session);
+    final isCut = fileTileLocalDragIsCut(event.session) ?? snapshot.isCut;
     String? dest;
     Offset? at;
+    Map<String, Offset>? placements;
     if (breadcrumbs) {
       dest = _hitTestBreadcrumb(event.position.global);
       if (dest == null || isDropIntoSelf(dest, localPaths)) return;
     } else {
-      final aim =
-          _resolveOsCanvasDropAim(viewModel, event.position.global, localPaths);
+      final aim = _resolveOsCanvasDropAim(
+        viewModel,
+        event.position.global,
+        localPaths,
+        anchorPath: fileTileLocalDragAnchor(event.session),
+        vacateSources: isCut,
+      );
       if (aim == null) return;
       dest = aim.folderPath ?? viewModel.currentDirectory;
       at = aim.cell;
+      placements = aim.placements;
     }
 
     _pendingDropPaths = snapshot.paths;
-    _pendingDropCut = snapshot.isCut;
+    _pendingDropCut = isCut;
     _pendingDropDest = dest;
     _pendingDropAt = at;
+    _pendingDropPlacements = placements;
 
     try {
       await viewModel.importPaths(
         snapshot.paths,
-        isCut: snapshot.isCut,
+        isCut: isCut,
         at: at,
         destDir: dest,
+        placements: placements,
       );
     } on MoveConflictException catch (e) {
       if (!mounted) return;
@@ -361,6 +618,7 @@ class _DesktopViewState extends State<DesktopView> {
           isCut: _pendingDropCut,
           at: _pendingDropAt,
           destDir: _pendingDropDest,
+          placements: _pendingDropPlacements,
           skipConflicts: true,
         ),
       );
@@ -395,14 +653,22 @@ class _DesktopViewState extends State<DesktopView> {
       formats: osFileDropFormats,
       hitTestBehavior: HitTestBehavior.opaque,
       onDropEnter: (_) => _osDropEnter(viewModel),
-      onDropLeave: (_) => _osDropLeave(viewModel),
-      onDropEnded: (_) => _osDropEnded(viewModel),
+      onDropLeave: (_) => _osDropLeave(viewModel, breadcrumbs: breadcrumbs),
+      onDropEnded: (_) => _osDropEnded(viewModel, breadcrumbs: breadcrumbs),
       onDropOver: (event) =>
           _onOsDropOver(event, viewModel, breadcrumbs: breadcrumbs),
       onPerformDrop: (event) =>
           _onOsPerformDrop(event, viewModel, breadcrumbs: breadcrumbs),
       child: child,
     );
+  }
+
+  /// Rename and new-file fields keep their own text undo.
+  bool _isTextInputFocused() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return false;
+    if (ctx.widget is EditableText) return true;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
@@ -426,6 +692,14 @@ class _DesktopViewState extends State<DesktopView> {
         return KeyEventResult.handled;
       case ControlAction.paste:
         _pasteFromShortcut(viewModel);
+        return KeyEventResult.handled;
+      case ControlAction.undo:
+        if (_isTextInputFocused()) return KeyEventResult.ignored;
+        viewModel.undo();
+        return KeyEventResult.handled;
+      case ControlAction.redo:
+        if (_isTextInputFocused()) return KeyEventResult.ignored;
+        viewModel.redo();
         return KeyEventResult.handled;
       case ControlAction.delete:
         if (viewModel.selectedNodeNames.isEmpty) {
@@ -484,64 +758,153 @@ class _DesktopViewState extends State<DesktopView> {
     }
   }
 
-  Set<_BorderSide> _getVisibleBorders(
-      DesktopNode node, DesktopViewModel viewModel) {
-    if (!viewModel.isNodeSelected(node.name)) {
-      return {
-        _BorderSide.top,
-        _BorderSide.right,
-        _BorderSide.bottom,
-        _BorderSide.left
-      };
+  /// OS drag image for a multi-selection: every dragged tile, laid out the
+  /// way it sits on the canvas, with the grabbed tile kept under the pointer.
+  Widget? _selectionDragImage(DesktopViewModel viewModel, DesktopNode anchor) {
+    if (!viewModel.isNodeSelected(anchor.name) ||
+        viewModel.selectedNodeNames.length < 2) {
+      return null;
+    }
+    final nodes = [
+      for (final node in viewModel.nodes)
+        if (viewModel.selectedNodeNames.contains(node.name) &&
+            node.name != MetadataManager.fileName)
+          node,
+    ];
+    if (nodes.length < 2 || !nodes.any((n) => n.name == anchor.name)) {
+      return null;
     }
 
-    final visibleBorders = <_BorderSide>{
+    final scale = viewModel.scale;
+    final cell = GridConfig.gridCellSize * scale;
+    var minX = nodes.first.position.dx;
+    var minY = nodes.first.position.dy;
+    var maxX = minX;
+    var maxY = minY;
+    for (final node in nodes) {
+      minX = math.min(minX, node.position.dx);
+      minY = math.min(minY, node.position.dy);
+      maxX = math.max(maxX, node.position.dx);
+      maxY = math.max(maxY, node.position.dy);
+    }
+    final width = (maxX - minX) * scale + cell;
+    final height = (maxY - minY) * scale + cell;
+    // A snapshot this large fails to encode and freezes the drag start.
+    const maxExtent = 4096.0;
+    if (width > maxExtent || height > maxExtent) return null;
+
+    final anchorPos = nodes.firstWhere((n) => n.name == anchor.name).position;
+    final anchorInImage = Offset(
+      (anchorPos.dx - minX) * scale,
+      (anchorPos.dy - minY) * scale,
+    );
+    final ordered = [
+      for (final node in nodes)
+        if (node.name != anchor.name) node,
+      nodes.firstWhere((n) => n.name == anchor.name),
+    ];
+
+    return SnapshotSettings(
+      translation: (rect, dragPosition) => -anchorInImage,
+      constraintsTransform: (constraints) =>
+          BoxConstraints.tightFor(width: width, height: height),
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (final node in ordered)
+              Positioned(
+                left: (node.position.dx - minX) * scale,
+                top: (node.position.dy - minY) * scale,
+                child: Opacity(
+                  opacity: viewModel.isCutPending(node.name) ? 0.45 : 1,
+                  child: _DesktopNodeWidget(
+                    node: node,
+                    scale: scale,
+                    gridSize: GridConfig.gridCellSize,
+                    directoryColor: viewModel.directoryColor,
+                    fileColor: viewModel.fileColor,
+                    isSelected: true,
+                    icon:
+                        iconForEntry(node.name, isDirectory: node.isDirectory),
+                    thumbnail: viewModel.thumbnailCache.imageFor(
+                      p.join(viewModel.currentDirectory, node.name),
+                    ),
+                    visibleBorders: _previewBorders(node, nodes, viewModel),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Set<_BorderSide> _previewBorders(
+    DesktopNode node,
+    List<DesktopNode> cohort,
+    DesktopViewModel viewModel,
+  ) {
+    Color colorOf(DesktopNode n) =>
+        n.color ??
+        (n.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
+    final nodeColor = colorOf(node);
+    final positions = <Offset>[node.position];
+    for (final other in cohort) {
+      if (other.name == node.name) continue;
+      if (colorOf(other) != nodeColor) continue;
+      positions.add(other.position);
+    }
+    final outer = outerCellOutlineSides(
+      node.position,
+      positions,
+      GridConfig.gridCellSize,
+    );
+    return {
+      if (outer.contains(CellOutlineSide.top)) _BorderSide.top,
+      if (outer.contains(CellOutlineSide.right)) _BorderSide.right,
+      if (outer.contains(CellOutlineSide.bottom)) _BorderSide.bottom,
+      if (outer.contains(CellOutlineSide.left)) _BorderSide.left,
+    };
+  }
+
+  Set<_BorderSide> _getVisibleBorders(
+      DesktopNode node, DesktopViewModel viewModel) {
+    const all = {
       _BorderSide.top,
       _BorderSide.right,
       _BorderSide.bottom,
-      _BorderSide.left
+      _BorderSide.left,
     };
+    if (!viewModel.isNodeSelected(node.name)) return all;
+
     final nodeColor = node.color ??
         (node.isDirectory ? viewModel.directoryColor : viewModel.fileColor);
-    final gridSize = GridConfig.gridCellSize;
-
-    // Check each neighbor direction and suppress borders if adjacent selected node has same color
+    final cohort = <Offset>[node.position];
     for (final neighbor in viewModel.nodes) {
       if (neighbor.name == node.name) continue;
-
-      final isNeighborSelected = viewModel.isNodeSelected(neighbor.name);
-      if (!isNeighborSelected) continue;
-
+      if (!viewModel.isNodeSelected(neighbor.name)) continue;
       final neighborColor = neighbor.color ??
           (neighbor.isDirectory
               ? viewModel.directoryColor
               : viewModel.fileColor);
-      final isSameColor = nodeColor == neighborColor;
-      if (!isSameColor) continue;
-
-      final dx = neighbor.position.dx - node.position.dx;
-      final dy = neighbor.position.dy - node.position.dy;
-      const tolerance = 1.0;
-
-      // Top neighbor (dy = -gridSize, dx = 0)
-      if ((dy + gridSize).abs() < tolerance && dx.abs() < tolerance) {
-        visibleBorders.remove(_BorderSide.top);
-      }
-      // Right neighbor (dx = gridSize, dy = 0)
-      else if ((dx - gridSize).abs() < tolerance && dy.abs() < tolerance) {
-        visibleBorders.remove(_BorderSide.right);
-      }
-      // Bottom neighbor (dy = gridSize, dx = 0)
-      else if ((dy - gridSize).abs() < tolerance && dx.abs() < tolerance) {
-        visibleBorders.remove(_BorderSide.bottom);
-      }
-      // Left neighbor (dx = -gridSize, dy = 0)
-      else if ((dx + gridSize).abs() < tolerance && dy.abs() < tolerance) {
-        visibleBorders.remove(_BorderSide.left);
-      }
+      if (neighborColor != nodeColor) continue;
+      cohort.add(neighbor.position);
     }
 
-    return visibleBorders;
+    final outer = outerCellOutlineSides(
+      node.position,
+      cohort,
+      GridConfig.gridCellSize,
+    );
+    return {
+      if (outer.contains(CellOutlineSide.top)) _BorderSide.top,
+      if (outer.contains(CellOutlineSide.right)) _BorderSide.right,
+      if (outer.contains(CellOutlineSide.bottom)) _BorderSide.bottom,
+      if (outer.contains(CellOutlineSide.left)) _BorderSide.left,
+    };
   }
 
   @override
@@ -638,6 +1001,8 @@ class _DesktopViewState extends State<DesktopView> {
               onKeyEvent: _handleKeyEvent,
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  _canvasSize =
+                      Size(constraints.maxWidth, constraints.maxHeight);
                   _updateVisibleThumbnails(viewModel, constraints);
                   return _osDropRegion(
                     viewModel: viewModel,
@@ -841,106 +1206,152 @@ class _DesktopViewState extends State<DesktopView> {
                                 viewModel.isNodeSelected(node.name);
                             final visibleBorders =
                                 _getVisibleBorders(node, viewModel);
+                            final isLayoutFile =
+                                node.name == MetadataManager.fileName;
+                            final nodeChild = GestureDetector(
+                              onTap: () {
+                                _clickHandler.bindings = viewModel.bindings;
+                                final hitTestNodes = viewModel.nodes.map((n) {
+                                  return HitTestNode(
+                                    id: n.name,
+                                    position: n.position,
+                                    size: GridConfig.gridCellSize,
+                                  );
+                                }).toList();
+                                _clickHandler.handleNodeTap(
+                                    nodeId: node.name, nodes: hitTestNodes);
+                              },
+                              onDoubleTap: node.isDirectory
+                                  ? () => viewModel.loadDirectory(p.join(
+                                      viewModel.currentDirectory, node.name))
+                                  : () =>
+                                      viewModel.openSystemDefault(node.name),
+                              onPanDown: isLayoutFile
+                                  ? (details) {
+                                      viewModel.startDrag({node.name});
+                                      final canvas = _globalToCanvas(
+                                          details.globalPosition);
+                                      _layoutGrabInCanvas = viewModel.coords
+                                              .logicalToScreen(node.position) -
+                                          canvas;
+                                      _layoutDragName = node.name;
+                                      _edgeScrollCursor =
+                                          details.globalPosition;
+                                    }
+                                  : null,
+                              onPanUpdate: isLayoutFile
+                                  ? (details) {
+                                      _armLayoutEdgeScroll(
+                                          details.globalPosition);
+                                      _pinLayoutFileToCursor(viewModel);
+                                    }
+                                  : null,
+                              onPanEnd: isLayoutFile
+                                  ? (_) {
+                                      _stopLayoutEdgeScroll();
+                                      viewModel
+                                          .completeOrRevertDrag({node.name});
+                                    }
+                                  : null,
+                              onPanCancel: isLayoutFile
+                                  ? () {
+                                      _stopLayoutEdgeScroll();
+                                      viewModel.cancelDrag();
+                                    }
+                                  : null,
+                              child: Opacity(
+                                opacity: viewModel.isCutPending(node.name)
+                                    ? 0.45
+                                    : 1,
+                                child: _DesktopNodeWidget(
+                                  node: node,
+                                  scale: viewModel.scale,
+                                  gridSize: GridConfig.gridCellSize,
+                                  directoryColor: viewModel.directoryColor,
+                                  fileColor: viewModel.fileColor,
+                                  isSelected: isSelected,
+                                  icon: iconForEntry(node.name,
+                                      isDirectory: node.isDirectory),
+                                  thumbnail: viewModel.thumbnailCache.imageFor(
+                                      p.join(viewModel.currentDirectory,
+                                          node.name)),
+                                  // Deferred: directory search.
+                                  // isSearchMatch:
+                                  //     viewModel.isSearchMatch(node.name),
+                                  visibleBorders: visibleBorders,
+                                  isDragTarget:
+                                      _dragTargetNodeName == node.name,
+                                ),
+                              ),
+                            );
                             return Positioned(
                               key: ValueKey(node.name),
                               left: screenPos.dx,
                               top: screenPos.dy,
-                              child: DragItemWidget(
-                                dragItemProvider: (request) async {
-                                  final namesToDrag = viewModel
-                                              .isNodeSelected(node.name) &&
-                                          viewModel.selectedNodeNames.length > 1
-                                      ? viewModel.selectedNodeNames
-                                      : {node.name};
-                                  final paths = [
-                                    for (final name in namesToDrag)
-                                      if (name != MetadataManager.fileName)
-                                        p.join(viewModel.currentDirectory, name)
-                                  ];
-                                  if (paths.isEmpty) return null;
-                                  _osDragOutDropWasLocal = false;
-                                  _listenForOsDragOut(request.session, paths);
-                                  final copy = HardwareKeyboard
-                                      .instance.isControlPressed;
-                                  debugPrint(
-                                      '[os-drag-out] start copy=$copy files=${paths.length}');
-                                  final item = DragItem(
-                                    suggestedName: p.basename(paths.first),
-                                    localData: {
-                                      fileTileDragLocalKey: true,
-                                      fileTileDragLocalPathsKey: paths,
-                                    },
-                                  );
-                                  item.add(gnomeCopiedFilesFormat(
-                                      encodeGnomeCopiedFiles(paths,
-                                          isCut: !copy)));
-                                  item.add(fileUriListFormat(
-                                      encodeFileUriList(paths)));
-                                  return item;
-                                },
-                                allowedOperations: () =>
-                                    osFileDragOutOperations(
-                                  controlPressed: HardwareKeyboard
-                                      .instance.isControlPressed,
-                                ),
-                                child: DraggableWidget(
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      _clickHandler.bindings =
-                                          viewModel.bindings;
-                                      final hitTestNodes =
-                                          viewModel.nodes.map((n) {
-                                        return HitTestNode(
-                                          id: n.name,
-                                          position: n.position,
-                                          size: GridConfig.gridCellSize,
-                                        );
-                                      }).toList();
-                                      _clickHandler.handleNodeTap(
-                                          nodeId: node.name,
-                                          nodes: hitTestNodes);
-                                    },
-                                    onDoubleTap: node.isDirectory
-                                        ? () => viewModel.loadDirectory(p.join(
-                                            viewModel.currentDirectory,
-                                            node.name))
-                                        : () => viewModel
-                                            .openSystemDefault(node.name),
-                                    child: Opacity(
-                                      opacity: viewModel.isCutPending(node.name)
-                                          ? 0.45
-                                          : 1,
-                                      child: _DesktopNodeWidget(
-                                        node: node,
-                                        scale: viewModel.scale,
-                                        gridSize: GridConfig.gridCellSize,
-                                        directoryColor:
-                                            viewModel.directoryColor,
-                                        fileColor: viewModel.fileColor,
-                                        isSelected: isSelected,
-                                        icon: iconForEntry(node.name,
-                                            isDirectory: node.isDirectory),
-                                        thumbnail: viewModel.thumbnailCache
-                                            .imageFor(p.join(
+                              child: isLayoutFile
+                                  ? nodeChild
+                                  : DragItemWidget(
+                                      dragItemProvider: (request) async {
+                                        final namesToDrag =
+                                            viewModel.isNodeSelected(
+                                                        node.name) &&
+                                                    viewModel.selectedNodeNames
+                                                            .length >
+                                                        1
+                                                ? viewModel.selectedNodeNames
+                                                : {node.name};
+                                        final paths = [
+                                          for (final name in namesToDrag)
+                                            if (name !=
+                                                MetadataManager.fileName)
+                                              p.join(viewModel.currentDirectory,
+                                                  name)
+                                        ];
+                                        if (paths.isEmpty) return null;
+                                        _osDragOutDropWasLocal = false;
+                                        _listenForOsDragOut(
+                                            request.session, paths);
+                                        final copy = HardwareKeyboard
+                                            .instance.isControlPressed;
+                                        debugPrint(
+                                            '[os-drag-out] start copy=$copy files=${paths.length}');
+                                        final item = DragItem(
+                                          suggestedName:
+                                              p.basename(paths.first),
+                                          localData: {
+                                            fileTileDragLocalKey: true,
+                                            fileTileDragLocalPathsKey: paths,
+                                            fileTileDragLocalAnchorKey: p.join(
                                                 viewModel.currentDirectory,
-                                                node.name)),
-                                        // Deferred: directory search.
-                                        // isSearchMatch:
-                                        //     viewModel.isSearchMatch(node.name),
-                                        visibleBorders: visibleBorders,
-                                        isDragTarget:
-                                            _dragTargetNodeName == node.name,
+                                                node.name),
+                                            fileTileDragLocalCutKey: !copy,
+                                          },
+                                        );
+                                        item.add(gnomeCopiedFilesFormat(
+                                            encodeGnomeCopiedFiles(paths,
+                                                isCut: !copy)));
+                                        item.add(fileUriListFormat(
+                                            encodeFileUriList(paths)));
+                                        return item;
+                                      },
+                                      allowedOperations: () =>
+                                          osFileDragOutOperations(
+                                        controlPressed: HardwareKeyboard
+                                            .instance.isControlPressed,
                                       ),
+                                      dragBuilder: (context, child) =>
+                                          _selectionDragImage(viewModel, node),
+                                      child: DraggableWidget(child: nodeChild),
                                     ),
-                                  ),
-                                ),
-                              ),
                             );
                           }),
-                          if (_osDropCellRect != null)
+                          if (_osDropCells.isNotEmpty &&
+                              _osDropAnchorCell != null)
                             Positioned.fill(
                               child: OsDropTargetOverlay(
-                                cellScreenRect: _osDropCellRect!,
+                                cells: _osDropCells,
+                                anchor: _osDropAnchorCell!,
+                                coords: viewModel.coords,
                                 color: colors.accent,
                               ),
                             ),
@@ -1081,6 +1492,16 @@ class _DesktopViewState extends State<DesktopView> {
                 isDirectory: false,
                 gridPosition: snappedPos,
                 originalLogicalPos: logicalPosition);
+          },
+        ),
+        CascadingMenuItem(
+          label: 'New Symlink',
+          icon: Icons.link,
+          onTap: () {
+            final snappedPos =
+                viewModel.coords.snapToCellCorner(logicalPosition);
+            _promptCreateSymlink(context, viewModel,
+                gridPosition: snappedPos, originalLogicalPos: logicalPosition);
           },
         ),
         CascadingMenuItem.divider(),
@@ -1401,6 +1822,135 @@ class _DesktopViewState extends State<DesktopView> {
             child: const Text('Create'),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _promptCreateSymlink(
+      BuildContext context, DesktopViewModel viewModel,
+      {Offset? gridPosition, Offset? originalLogicalPos}) async {
+    final nameController = TextEditingController();
+    final colors = Theme.of(context).extension<FileTileColors>()!;
+    final picker = LinuxFilePicker();
+    String? targetPath;
+    String? suggestedName;
+    String? pickerError;
+
+    return showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) {
+          void applyTarget(String path) {
+            final base = p.basename(path);
+            if (nameController.text.isEmpty ||
+                nameController.text == suggestedName) {
+              nameController.text = base;
+              suggestedName = base;
+            }
+            targetPath = path;
+            pickerError = null;
+          }
+
+          String pickerStart() {
+            final current = targetPath;
+            if (current == null || current.isEmpty) {
+              return viewModel.currentDirectory;
+            }
+            return p.dirname(current);
+          }
+
+          Future<void> choose(Future<String?> Function() pick) async {
+            try {
+              final path = await pick();
+              if (!context.mounted || path == null || path.isEmpty) return;
+              setState(() => applyTarget(path));
+            } catch (e) {
+              debugPrint('File picker failed: $e');
+              if (!context.mounted) return;
+              setState(() => pickerError = "Couldn't open the file picker");
+            }
+          }
+
+          void submit() {
+            final name = nameController.text;
+            final target = targetPath;
+            if (name.isEmpty || target == null || target.isEmpty) return;
+            viewModel.createSymlink(name, target,
+                gridPosition: gridPosition,
+                originalLogicalPos: originalLogicalPos);
+            Navigator.pop(dialogContext);
+          }
+
+          return AlertDialog(
+            insetPadding: const EdgeInsets.symmetric(horizontal: 20.0),
+            backgroundColor: colors.surface,
+            title: Text('New Symlink',
+                style: TextStyle(color: colors.textPrimary)),
+            content: SizedBox(
+              width: MediaQuery.of(context).size.width * 0.33,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    autofocus: true,
+                    style: TextStyle(color: colors.textPrimary),
+                    decoration: InputDecoration(
+                      hintText: 'Link name',
+                      hintStyle: TextStyle(color: colors.textDim),
+                      enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: colors.borderSubtle)),
+                    ),
+                    onSubmitted: (_) => submit(),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    targetPath ?? 'No target selected',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: targetPath == null
+                          ? colors.textDim
+                          : colors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => choose(() =>
+                            picker.pickFile(initialDirectory: pickerStart())),
+                        icon: const Icon(Icons.insert_drive_file_outlined,
+                            size: 18),
+                        label: const Text('Choose file'),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => choose(() => picker.pickDirectory(
+                            initialDirectory: pickerStart())),
+                        icon: const Icon(Icons.folder_open, size: 18),
+                        label: const Text('Choose folder'),
+                      ),
+                    ],
+                  ),
+                  if (pickerError != null)
+                    Text(pickerError!,
+                        style: const TextStyle(color: Colors.redAccent)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: submit,
+                child: const Text('Create'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1905,6 +2455,8 @@ class _DesktopViewState extends State<DesktopView> {
                                         ControlAction.copy,
                                         ControlAction.cut,
                                         ControlAction.paste,
+                                        ControlAction.undo,
+                                        ControlAction.redo,
                                         ControlAction.zoom,
                                         ControlAction.panVertical,
                                         ControlAction.panHorizontal,
@@ -2231,15 +2783,29 @@ class _OsCanvasDropAim {
   final String? folderName;
   final Offset? folderPosition;
   final Offset? cell;
+  final Map<String, Offset>? placements;
+  final String? anchorName;
 
   const _OsCanvasDropAim.folder({
     required this.folderPath,
     required this.folderName,
     required this.folderPosition,
-  }) : cell = null;
+  })  : cell = null,
+        placements = null,
+        anchorName = null;
 
   const _OsCanvasDropAim.cell(this.cell)
       : folderPath = null,
+        folderName = null,
+        folderPosition = null,
+        placements = null,
+        anchorName = null;
+
+  const _OsCanvasDropAim.reposition({
+    required this.cell,
+    required this.placements,
+    required this.anchorName,
+  })  : folderPath = null,
         folderName = null,
         folderPosition = null;
 }

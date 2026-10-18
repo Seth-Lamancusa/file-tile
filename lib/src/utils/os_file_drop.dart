@@ -8,6 +8,8 @@ import 'os_file_clipboard.dart';
 
 const fileTileDragLocalKey = 'file_tile_os_drag';
 const fileTileDragLocalPathsKey = 'paths';
+const fileTileDragLocalAnchorKey = 'anchor';
+const fileTileDragLocalCutKey = 'cut';
 
 List<DataFormat> get osFileDropFormats => [
       gnomeCopiedFilesFormat,
@@ -67,14 +69,35 @@ bool isFileTileLocalDrop(DropSession session) {
 }
 
 List<String> fileTileLocalDragPaths(DropSession session) {
+  final data = _fileTileLocalData(session);
+  if (data == null) return const [];
+  final raw = data[fileTileDragLocalPathsKey];
+  if (raw is! List) return const [];
+  return [for (final path in raw) path.toString()];
+}
+
+/// Path of the tile under the pointer when the drag started.
+/// Its landing cell is where the OS drag image will sit.
+String? fileTileLocalDragAnchor(DropSession session) {
+  final raw = _fileTileLocalData(session)?[fileTileDragLocalAnchorKey];
+  if (raw is! String || raw.isEmpty) return null;
+  return raw;
+}
+
+/// Cut/copy frozen into the local payload at drag start.
+/// Null for drags that did not start inside File Tile.
+bool? fileTileLocalDragIsCut(DropSession session) {
+  final raw = _fileTileLocalData(session)?[fileTileDragLocalCutKey];
+  if (raw is bool) return raw;
+  return null;
+}
+
+Map<dynamic, dynamic>? _fileTileLocalData(DropSession session) {
   for (final item in session.items) {
     final data = item.localData;
-    if (!isFileTileLocalData(data) || data is! Map) continue;
-    final raw = data[fileTileDragLocalPathsKey];
-    if (raw is! List) continue;
-    return [for (final path in raw) path.toString()];
+    if (isFileTileLocalData(data) && data is Map) return data;
   }
-  return const [];
+  return null;
 }
 
 /// True when [destDir] is one of [sourcePaths] or nested inside one of them.

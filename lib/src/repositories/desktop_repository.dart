@@ -1,6 +1,7 @@
 import '../models/directory_layout_issue.dart';
 import '../models/metadata_backend.dart';
 import '../models/new_element_placement_config.dart';
+import '../models/trash_token.dart';
 
 /// A directory entry as seen by [DesktopRepository].
 class DesktopEntity {
@@ -8,8 +9,16 @@ class DesktopEntity {
   final bool isDirectory;
   final bool isSymlink;
 
-  DesktopEntity(
-      {required this.name, required this.isDirectory, this.isSymlink = false});
+  /// Last content modification time. Null when the filesystem did not
+  /// report one. Used to order an item's first placement in the inbox.
+  final DateTime? modified;
+
+  DesktopEntity({
+    required this.name,
+    required this.isDirectory,
+    this.isSymlink = false,
+    this.modified,
+  });
 }
 
 /// Abstraction over the filesystem access `DesktopViewModel` needs.
@@ -34,9 +43,21 @@ abstract class DesktopRepository {
   /// `false` if it already existed.
   Future<bool> createDirectory(String path);
 
-  /// Delete the file or directory at [path] (directories are removed
-  /// recursively). Throws if nothing exists at [path].
-  Future<void> delete(String path);
+  /// Create a symbolic link at [path] pointing at [target].
+  /// Returns `true` if it was created, `false` if something already
+  /// exists at [path]. [target] is stored as given (absolute or relative).
+  Future<bool> createSymlink(String path, String target);
+
+  /// Move the file or directory at [path] to the trash.
+  ///
+  /// Returns a token when the item can be restored with [restore]. Returns
+  /// null when the platform removed it but this app cannot put it back.
+  /// Throws if nothing exists at [path].
+  Future<TrashToken?> delete(String path);
+
+  /// Restore a previously trashed item to [TrashToken.originalPath].
+  /// Throws if that path is occupied or the trash entry is gone.
+  Future<void> restore(TrashToken token);
 
   /// Rename/move the file or directory at [oldPath] to [newPath].
   /// No-ops if nothing exists at [oldPath].
