@@ -1,0 +1,7 @@
+# Embedded by release.sh. appimageupdatetool resolves "latest" to the newest
+# GitHub Release and downloads the matching .zsync asset. Publish both the
+# .AppImage and the .AppImage.zsync with publish_github.sh.
+gh-releases-zsync|Seth-Lamancusa|file-tile|latest|file_tile-*linux.AppImage.zsync
+
+# Any HTTP server that supports range requests:
+# zsync|https://updates.example.com/file_tile-latest-linux.AppImage.zsync

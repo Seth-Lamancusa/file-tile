@@ -76,6 +76,9 @@ coverage/
 # Exceptions to above rules.
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
 
+# Downloaded AppImage updater binary (fetched by bundle_updater.sh)
+linux/packaging/appimage/.cache/
+
 # Config files
 stitch-grid-config.json
 **/stitch-grid.json

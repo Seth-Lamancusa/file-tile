@@ -6,3 +6,6 @@ icon: assets/grid.png
 categories:
   - Development
   - Utility
+
+# Self-update metadata is not a make_config field. Put the host string in
+# update_information and package with release.sh so appimagetool receives it.

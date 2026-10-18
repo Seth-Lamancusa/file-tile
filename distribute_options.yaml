@@ -9,3 +9,5 @@ releases:
           target: appimage
           build_args:
             dart-define: APP_ENV=prod
+          hooks:
+            pre: linux/packaging/appimage/bundle_updater.sh
