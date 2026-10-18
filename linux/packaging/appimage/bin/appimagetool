@@ -47,4 +47,22 @@ if [[ -n "$info" ]]; then
 fi
 args+=("$@")
 
-exec "$real" "${args[@]}"
+"$real" "${args[@]}"
+status=$?
+
+# appimagetool writes the .zsync in the working directory. Keep it beside the AppImage.
+dest=""
+for arg in "$@"; do
+  if [[ "$arg" == *.AppImage ]]; then
+    dest="$arg"
+  fi
+done
+if [[ -n "$dest" ]]; then
+  dropped="$(basename "$dest").zsync"
+  if [[ -f "$dropped" ]]; then
+    mkdir -p "$(dirname "$dest")"
+    mv -f "$dropped" "$dest.zsync"
+  fi
+fi
+
+exit "$status"

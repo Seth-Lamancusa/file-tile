@@ -79,6 +79,12 @@ coverage/
 # Downloaded AppImage updater binary (fetched by bundle_updater.sh)
 linux/packaging/appimage/.cache/
 
+# Packaged AppImages and the layout files created by opening dist/ in the app.
+# Releases are uploaded to GitHub, not committed.
+/dist/
+# appimagetool writes the .zsync in the working directory before it is moved.
+/*.AppImage.zsync
+
 # Config files
 stitch-grid-config.json
 **/stitch-grid.json
