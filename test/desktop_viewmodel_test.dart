@@ -1457,15 +1457,118 @@ void main() {
       expect(vm.nodes.any((n) => n.name == 'b.txt'), isTrue);
     });
 
-    test('an external drag-out is not undoable', () async {
+    test('an external drag-out can be undone', () async {
+      final repo = FakeDesktopRepository();
+      repo.seedDirectory(repo.initialDirectory, [
+        DesktopEntity(name: 'gone.txt', isDirectory: false),
+      ], layout: {
+        'gone.txt': {'x': 80.0, 'y': 160.0, 'color': 0xFF112233},
+      });
+      final vm = await _createInitialized(repo);
+      await vm.finalizeExternalMove([p.join(repo.initialDirectory, 'gone.txt')]);
+      expect(vm.nodes, isEmpty);
+      expect(vm.canUndo, isTrue);
+
+      await vm.undo();
+      final restored = vm.nodes.firstWhere((n) => n.name == 'gone.txt');
+      expect(restored.position, const Offset(80, 160));
+      expect(restored.color, const Color(0xFF112233));
+      expect(vm.canRedo, isTrue);
+
+      await vm.redo();
+      expect(vm.nodes, isEmpty);
+      expect(vm.canUndo, isTrue);
+    });
+
+    test('an external move of a file the other app already took is not an undo',
+        () async {
+      final repo = FakeDesktopRepository();
+      repo.seedDirectory(repo.initialDirectory, [
+        DesktopEntity(name: 'stays.txt', isDirectory: false),
+      ]);
+      final vm = await _createInitialized(repo);
+      await vm.finalizeExternalMove(
+          [p.join(repo.initialDirectory, 'missing.txt')]);
+      expect(vm.nodes.map((n) => n.name), ['stays.txt']);
+      expect(vm.canUndo, isFalse);
+      expect(vm.lastError, isNull);
+    });
+
+    test('an external move can undo a file the other app already removed',
+        () async {
+      final repo = FakeDesktopRepository();
+      repo.seedDirectory(repo.initialDirectory, [
+        DesktopEntity(name: 'gone.txt', isDirectory: false),
+      ], layout: {
+        'gone.txt': {'x': 80.0, 'y': 160.0},
+      });
+      final vm = await _createInitialized(repo);
+      final path = p.join(repo.initialDirectory, 'gone.txt');
+      await repo.delete(path);
+      var released = false;
+
+      await vm.finalizeExternalMove(
+        [path],
+        restoreTaken: (original) async {
+          await repo.createFile(original);
+          return true;
+        },
+        releaseUnused: () async {
+          released = true;
+        },
+      );
+
+      expect(vm.nodes, isEmpty);
+      expect(vm.canUndo, isTrue);
+      expect(released, isTrue);
+
+      await vm.undo();
+      expect(
+        vm.nodes.firstWhere((n) => n.name == 'gone.txt').position,
+        const Offset(80, 160),
+      );
+    });
+
+    test('a non-move drop puts a taken file back and does not trash it',
+        () async {
       final repo = FakeDesktopRepository();
       repo.seedDirectory(repo.initialDirectory, [
         DesktopEntity(name: 'gone.txt', isDirectory: false),
       ]);
       final vm = await _createInitialized(repo);
-      await vm.finalizeExternalMove([p.join(repo.initialDirectory, 'gone.txt')]);
-      expect(vm.nodes, isEmpty);
+      final path = p.join(repo.initialDirectory, 'gone.txt');
+      await repo.delete(path);
+
+      await vm.finalizeExternalMove(
+        [path],
+        deleteIfPresent: false,
+        restoreTaken: (original) async {
+          await repo.createFile(original);
+          return true;
+        },
+      );
+
+      expect(vm.nodes.any((n) => n.name == 'gone.txt'), isTrue);
       expect(vm.canUndo, isFalse);
+    });
+
+    test('a non-move drop leaves a file that is still there', () async {
+      final repo = FakeDesktopRepository();
+      repo.seedDirectory(repo.initialDirectory, [
+        DesktopEntity(name: 'stays.txt', isDirectory: false),
+      ]);
+      final vm = await _createInitialized(repo);
+      var released = false;
+      await vm.finalizeExternalMove(
+        [p.join(repo.initialDirectory, 'stays.txt')],
+        deleteIfPresent: false,
+        releaseUnused: () async {
+          released = true;
+        },
+      );
+      expect(vm.nodes.map((n) => n.name), ['stays.txt']);
+      expect(vm.canUndo, isFalse);
+      expect(released, isTrue);
     });
   });
 }

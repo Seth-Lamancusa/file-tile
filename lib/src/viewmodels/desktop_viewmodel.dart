@@ -1900,18 +1900,94 @@ class DesktopViewModel extends ChangeNotifier {
     await _saveMetadata();
   }
 
-  /// After another app accepts an outbound move, remove leftovers and reload.
-  /// This is not undoable: the other app owns the file.
-  Future<void> finalizeExternalMove(List<String> paths) {
+  /// Finish an outbound drag.
+  ///
+  /// A move trashes whatever is still at [paths], and undo puts it back.
+  /// When the other app has already removed a path, [restoreTaken] puts the
+  /// drag-start snapshot back so that move can be undone too. A copy or
+  /// cancel leaves a surviving file where it is; if one was taken anyway,
+  /// [restoreTaken] puts it back immediately.
+  /// [releaseUnused] drops snapshots that were not put back.
+  Future<void> finalizeExternalMove(
+    List<String> paths, {
+    bool deleteIfPresent = true,
+    Future<bool> Function(String originalPath)? restoreTaken,
+    Future<void> Function()? releaseUnused,
+  }) {
     return _runExclusive(() async {
-      for (final path in paths) {
-        try {
-          await _repository.delete(path);
-        } catch (_) {}
+      try {
+        final items = <DeletedEditItem>[];
+        var changed = false;
+        for (final path in paths) {
+          final directory = p.dirname(path);
+          final name = p.basename(path);
+          if (name.isEmpty || name == MetadataManager.fileName) continue;
+          final layout = await _layoutFor(directory, name);
+          final present = await _containsName(directory, name);
+          if (present == true && !deleteIfPresent) continue;
+          if (present == false) {
+            final restored = await _restoreTaken(restoreTaken, path);
+            if (!restored) continue;
+            changed = true;
+            if (!deleteIfPresent) continue;
+          } else if (present == null && !deleteIfPresent) {
+            continue;
+          }
+
+          final TrashToken? token;
+          try {
+            token = await _repository.delete(path);
+          } catch (_) {
+            continue;
+          }
+          changed = true;
+          try {
+            if (!_layoutIoBlocked(directory)) {
+              await _repository.removeFromLayout(directory, name);
+            }
+          } catch (e) {
+            debugPrint('Failed to update metadata during external move: $e');
+            _setLayoutIssue(directory, e);
+          }
+          if (token == null) continue;
+          items.add(DeletedEditItem(
+            directory: directory,
+            name: name,
+            layout: layout,
+            token: token,
+          ));
+        }
+        if (changed) {
+          await _loadDirectoryImpl(_currentDirectory,
+              addToHistory: false, force: true);
+        }
+        if (items.isNotEmpty) _record(DeletedEdit(items));
+      } finally {
+        await releaseUnused?.call();
       }
-      await _loadDirectoryImpl(_currentDirectory,
-          addToHistory: false, force: true);
     });
+  }
+
+  Future<bool> _restoreTaken(
+    Future<bool> Function(String originalPath)? restoreTaken,
+    String path,
+  ) async {
+    if (restoreTaken == null) return false;
+    try {
+      return await restoreTaken(path);
+    } catch (e) {
+      debugPrint('Drag snapshot restore failed for $path: $e');
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _layoutFor(String directory, String name) async {
+    if (directory == _currentDirectory) {
+      final existing = _findNode(name)?.toJson();
+      if (existing == null) return null;
+      return Map<String, dynamic>.from(existing);
+    }
+    return _layoutValue((await _readLayoutOrEmpty(directory))[name]);
   }
 
   // Deferred: directory search (filter + nested walk).

@@ -177,6 +177,14 @@ Future<void> _renameEntity(String from, String to) async {
   }
 }
 
+/// Writable directory on the same filesystem as [absolutePath].
+/// A hardlink kept here survives if another app unlinks the original.
+String sameFilesystemScratchDirectory(String absolutePath) {
+  final normalized = p.normalize(File(absolutePath).absolute.path);
+  if (!Platform.isLinux) return Directory.systemTemp.path;
+  return p.join(_linuxTrashDirectory(normalized), '.file-tile-stash');
+}
+
 String _homeTrashDir() {
   final xdg = Platform.environment['XDG_DATA_HOME'];
   if (xdg != null && xdg.isNotEmpty) return p.join(xdg, 'Trash');

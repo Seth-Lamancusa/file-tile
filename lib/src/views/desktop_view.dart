@@ -22,6 +22,7 @@ import '../widgets/os_drop_target_overlay.dart';
 import '../widgets/placement_region_painter.dart';
 import '../widgets/selection_box_painter.dart';
 import '../utils/coordinate_space.dart';
+import '../utils/drag_out_snapshot.dart';
 import '../utils/edge_auto_scroll.dart';
 import '../utils/file_icons.dart';
 import '../utils/linux_file_picker.dart';
@@ -625,20 +626,31 @@ class _DesktopViewState extends State<DesktopView> {
     }
   }
 
-  void _listenForOsDragOut(DragSession session, List<String> paths) {
+  void _listenForOsDragOut(
+    DragSession session,
+    List<String> paths,
+    DragOutSnapshot snapshot,
+  ) {
     void listener() {
       session.dragCompleted.removeListener(listener);
       final op = session.dragCompleted.value;
       debugPrint(
           '[os-drag-out] done op=$op local=$_osDragOutDropWasLocal files=${paths.length}');
-      if (!mounted) return;
-      if (_osDragOutDropWasLocal) {
-        _osDragOutDropWasLocal = false;
+      if (!mounted) {
+        unawaited(snapshot.discard());
         return;
       }
-      if (op == DropOperation.move) {
-        context.read<DesktopViewModel>().finalizeExternalMove(paths);
+      if (_osDragOutDropWasLocal) {
+        _osDragOutDropWasLocal = false;
+        unawaited(snapshot.discard());
+        return;
       }
+      unawaited(context.read<DesktopViewModel>().finalizeExternalMove(
+            paths,
+            deleteIfPresent: op == DropOperation.move,
+            restoreTaken: snapshot.putBack,
+            releaseUnused: snapshot.discard,
+          ));
     }
 
     session.dragCompleted.addListener(listener);
@@ -1308,9 +1320,16 @@ class _DesktopViewState extends State<DesktopView> {
                                                   name)
                                         ];
                                         if (paths.isEmpty) return null;
+                                        final snapshot =
+                                            await DragOutSnapshot.capture(
+                                                paths);
+                                        if (!mounted) {
+                                          await snapshot.discard();
+                                          return null;
+                                        }
                                         _osDragOutDropWasLocal = false;
                                         _listenForOsDragOut(
-                                            request.session, paths);
+                                            request.session, paths, snapshot);
                                         final copy = HardwareKeyboard
                                             .instance.isControlPressed;
                                         debugPrint(

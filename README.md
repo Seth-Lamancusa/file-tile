@@ -142,55 +142,25 @@ final List<Map<String, String>> _appRegistry = [
 
 
 
-## Build Instructions
+### Ship It
 
-Install the packager once:
-
-`dart pub global activate flutter_distributor`
-
-Build the AppImage:
-
-`linux/packaging/appimage/release.sh`
-
-Use that script instead of calling `flutter_distributor` directly. It puts a small `appimagetool` wrapper first on `PATH`, and `flutter_distributor` does not pass update information on its own. The wrapper reads `linux/packaging/appimage/update_information` and forwards it as `appimagetool --updateinformation`.
-
-The build machine also needs the real `appimagetool` on `PATH`, and `zsync` (`sudo apt install zsync`) so `zsyncmake` can write a `.zsync` file next to the AppImage. Without `zsync`, the AppImage still builds, but clients cannot delta-update to it.
-
-Output lands in `dist/<version>/`, for example `dist/0.1.1/file_tile-0.1.1-linux.AppImage` and `file_tile-0.1.1-linux.AppImage.zsync`.
-
-### Self-update
-
-People who download the AppImage do not install `zsync`, `appimagetool`, or `appimageupdatetool`. Those first two are build tools. The updater is copied into the AppImage automatically when it is packaged, and the running app calls that bundled copy.
-
-Release AppImages update themselves from GitHub Releases on [Seth-Lamancusa/file-tile](https://github.com/Seth-Lamancusa/file-tile). The embedded update string is:
-
-```
-gh-releases-zsync|Seth-Lamancusa|file-tile|latest|file_tile-*linux.AppImage.zsync
-```
-
-`latest` means the newest GitHub Release. The last field is a filename glob for the `.zsync` asset. `appimageupdatetool` uses that file to download only the changed bytes.
-
-At package time, `linux/packaging/appimage/bundle_updater.sh` (a `flutter_distributor` pre-hook) downloads `appimageupdatetool` into `linux/packaging/appimage/.cache/` and copies it to `usr/bin/appimageupdatetool` inside the AppImage. The cache directory is gitignored.
-
-On startup, when `$APPIMAGE` is set, the app runs:
+One-time setup. `appimagetool` must be on `PATH`.
 
 ```bash
-appimageupdatetool --check-for-update "$APPIMAGE"
-```
-
-Exit code 1 means an update is available. The app then shows **New update available. Install now?** Choosing Install now runs `appimageupdatetool --overwrite "$APPIMAGE"`, which replaces the file on disk while this process keeps running, then offers a restart. **Not now** leaves the session as it is. A `flutter run` build has no `$APPIMAGE`, so it never asks.
-
-To publish a build that installed copies can update to:
-
-```bash
+dart pub global activate flutter_distributor
 sudo apt install zsync gh
 gh auth login
-linux/packaging/appimage/publish_github.sh
 ```
 
-`publish_github.sh` packages, then uploads both the `.AppImage` and the `.AppImage.zsync` to the release tagged `v<version>` from `pubspec.yaml` (currently `v0.1.1`). If that release already exists, the two assets are replaced. Pass `--skip-build` to upload files already in `dist/<version>/`.
+`zsync` writes the `.zsync` file. Without it the AppImage still builds, but installed copies cannot delta-update.
 
-The first published AppImage is the baseline. The update dialog appears after a newer release is published with both assets. An AppImage built before the update string was embedded cannot update itself.
+To ship a version, set `version` in `pubspec.yaml`, commit, push, then:
+
+`linux/packaging/appimage/publish_github.sh`
+
+That builds the AppImage and uploads it and the `.zsync` to the `v<version>` release on [Seth-Lamancusa/file-tile](https://github.com/Seth-Lamancusa/file-tile). An existing release gets those two assets replaced. `--skip-build` uploads files already in `dist/<version>/`. `linux/packaging/appimage/release.sh` builds without uploading.
+
+Installed AppImages ask to update when a newer release has both files. The first published build is the baseline. `flutter run` does not ask.
 
 ## Future Enhancements
 

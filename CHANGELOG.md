@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-20
+
+### Fixed
+
+- An external drag can be undone. A same-disk snapshot is kept for the drag, so the file can be restored when another app takes it and then discards it. A copy or cancelled drop puts that file back immediately.
+
 ## [0.1.1] - 2026-10-18
 
 Feature waves scoped 2026-09-08 (Waves 1–4). Linux is the primary target; macOS and Windows support for terminal, clipboard, and drag is best-effort.
