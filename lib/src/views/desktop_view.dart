@@ -98,6 +98,7 @@ class _DesktopViewState extends State<DesktopView> {
   }
 
   Future<void> _offerAppImageUpdate() async {
+    await _appImageUpdater.removeLeftoverAppImage();
     final status = await _appImageUpdater.checkForUpdate();
     if (!mounted || status != AppImageUpdateStatus.updateAvailable) return;
 

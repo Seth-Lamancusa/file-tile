@@ -52,6 +52,62 @@ void main() {
     });
   });
 
+  group('removeLeftoverAppImage', () {
+    test('deletes the zsync backup beside the running AppImage', () async {
+      String? deleted;
+      final updater = AppImageUpdater(
+        environment: const {'APPIMAGE': '/home/seth/FileTile.AppImage'},
+        fileExists: (path) => path.endsWith('.zs-old'),
+        deleteFile: (path) async {
+          deleted = path;
+        },
+      );
+
+      await updater.removeLeftoverAppImage();
+      expect(deleted, '/home/seth/FileTile.AppImage.zs-old');
+    });
+
+    test('does nothing when no backup is present', () async {
+      var deleted = false;
+      final updater = AppImageUpdater(
+        environment: const {'APPIMAGE': '/home/seth/FileTile.AppImage'},
+        fileExists: (_) => false,
+        deleteFile: (_) async {
+          deleted = true;
+        },
+      );
+
+      await updater.removeLeftoverAppImage();
+      expect(deleted, isFalse);
+    });
+
+    test('does nothing outside an AppImage', () async {
+      var deleted = false;
+      final updater = AppImageUpdater(
+        environment: const {},
+        fileExists: (_) => true,
+        deleteFile: (_) async {
+          deleted = true;
+        },
+      );
+
+      await updater.removeLeftoverAppImage();
+      expect(deleted, isFalse);
+    });
+
+    test('a backup that is still busy does not throw', () async {
+      final updater = AppImageUpdater(
+        environment: const {'APPIMAGE': '/home/seth/FileTile.AppImage'},
+        fileExists: (_) => true,
+        deleteFile: (_) async {
+          throw const FileSystemException('busy');
+        },
+      );
+
+      await updater.removeLeftoverAppImage();
+    });
+  });
+
   group('environmentForRelaunch', () {
     test('drops the running AppImage mount variables', () {
       final env = environmentForRelaunch({

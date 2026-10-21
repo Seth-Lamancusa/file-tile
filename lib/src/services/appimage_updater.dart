@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 /// What `appimageupdatetool --check-for-update` reported.
 ///
 /// The tool's own exit codes are the opposite of a casual reading of "0 means
@@ -38,11 +40,13 @@ class AppImageUpdater {
     Future<void> Function(String executable, Map<String, String> environment)?
         startDetached,
     void Function(int code)? exitProcess,
+    Future<void> Function(String path)? deleteFile,
   })  : _environment = environment ?? Platform.environment,
         _fileExists = fileExists ?? _defaultFileExists,
         _run = run ?? _defaultRun,
         _startDetached = startDetached ?? _defaultStartDetached,
-        _exitProcess = exitProcess ?? exit;
+        _exitProcess = exitProcess ?? exit,
+        _deleteFile = deleteFile ?? _defaultDeleteFile;
 
   static const toolRelativePath = 'usr/bin/appimageupdatetool';
   static const checkTimeout = Duration(seconds: 30);
@@ -54,6 +58,7 @@ class AppImageUpdater {
   final Future<void> Function(
       String executable, Map<String, String> environment) _startDetached;
   final void Function(int code) _exitProcess;
+  final Future<void> Function(String path) _deleteFile;
 
   String? get appImagePath {
     final path = _environment['APPIMAGE'];
@@ -65,6 +70,20 @@ class AppImageUpdater {
         environment: _environment,
         exists: _fileExists,
       );
+
+  /// zsync renames the running AppImage to this while writing the update,
+  /// then cannot delete it until that process has exited.
+  Future<void> removeLeftoverAppImage() async {
+    final appImage = appImagePath;
+    if (appImage == null) return;
+    final stale = '$appImage.zs-old';
+    if (!_fileExists(stale)) return;
+    try {
+      await _deleteFile(stale);
+    } catch (e) {
+      debugPrint('Could not remove previous AppImage: $e');
+    }
+  }
 
   Future<AppImageUpdateStatus> checkForUpdate() async {
     final tool = toolPath;
@@ -177,6 +196,8 @@ String summarizeToolError(String? stderr, int exitCode) {
 }
 
 bool _defaultFileExists(String path) => File(path).existsSync();
+
+Future<void> _defaultDeleteFile(String path) => File(path).delete();
 
 Future<ProcessResult> _defaultRun(
   String executable,
